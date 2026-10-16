@@ -1,0 +1,9 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="190" height="190" viewBox="0 0 190 190" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle id="Decorative Glow" cx="95" cy="95" r="95" fill="url(#paint0_radial_0_37)"/>
+<defs>
+<radialGradient id="paint0_radial_0_37" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="scale(190)">
+<stop stop-color="#EBC4A6" stop-opacity="0.34"/>
+<stop offset="1" stop-color="#EBC4A6" stop-opacity="0"/>
+</radialGradient>
+</defs>
+</svg>

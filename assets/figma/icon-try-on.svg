@@ -1,0 +1,8 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Icon/TryOn">
+<path id="Head" d="M10 11.6C12.0434 11.6 13.7 9.94345 13.7 7.9C13.7 5.85655 12.0434 4.2 10 4.2C7.95655 4.2 6.3 5.85655 6.3 7.9C6.3 9.94345 7.95655 11.6 10 11.6Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Shoulders" d="M3.3 20.3C3.3 16.6997 6.3 13.9 10 13.9C11.6 13.9 13.1 14.42 14.3 15.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Sparkle" d="M18.4 2.7L19.33 5.07L21.7 6L19.33 6.93L18.4 9.3L17.47 6.93L15.1 6L17.47 5.07L18.4 2.7Z" fill="currentColor"/>
+<path id="SparkleSmall" d="M21.1 11.1L21.62 12.43L22.95 12.95L21.62 13.47L21.1 14.8L20.58 13.47L19.25 12.95L20.58 12.43L21.1 11.1Z" fill="currentColor"/>
+</g>
+</svg>

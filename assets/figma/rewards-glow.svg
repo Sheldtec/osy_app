@@ -1,0 +1,9 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="130" height="130" viewBox="0 0 130 130" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle id="Rewards Glow" cx="65" cy="65" r="65" fill="url(#paint0_radial_0_56)"/>
+<defs>
+<radialGradient id="paint0_radial_0_56" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="scale(130)">
+<stop stop-color="#F0C7A1" stop-opacity="0.3"/>
+<stop offset="1" stop-color="#F0C7A1" stop-opacity="0"/>
+</radialGradient>
+</defs>
+</svg>

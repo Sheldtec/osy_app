@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "OsyGentle",
+    "slug": "osygentle",
+    "scheme": "osygentle",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "backgroundColor": "#FCFBFC",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.osygentle.app"
+    },
+    "android": {
+      "package": "com.osygentle.app",
+      "backgroundColor": "#FCFBFC",
+      "adaptiveIcon": {
+        "backgroundColor": "#5C2A7F",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#FCFBFC",
+          "imageWidth": 180
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "OsyGentle uses a photo you choose to show you how a piece would look on you.",
+          "cameraPermission": "OsyGentle uses your camera to take the photo your try-on is rendered from."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
