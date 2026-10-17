@@ -12,7 +12,8 @@ import {
   photoFor,
 } from "@/components/icons";
 import { Badge, Card, GradientButton, Stepper, Txt } from "@/components/ui";
-import { naira } from "@/lib/format";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import { netPriceForLength } from "@/lib/product-variant";
 import { lineKey, useCart } from "@/lib/cart";
 import type { Theme } from "@/theme/theme";
@@ -36,6 +37,7 @@ export default function CartScreen() {
   const insets = useSafeAreaInsets();
   const { lines, subtotal, count, ready, setQty, remove, clear } = useCart();
   const [promo, setPromo] = useState("");
+  const money = useApproxMoney();
 
   // Delivery is NOT free and is not known here. The server prices it from the
   // admin's shipping zones once it knows the destination state, and the
@@ -138,7 +140,7 @@ export default function CartScreen() {
                       <Txt tone="body" size={10} style={{ marginTop: 4 }}>
                         {line.preparationTitle}
                         {line.preparationStyleLabel ? ` · ${line.preparationStyleLabel}` : ""}
-                        {line.surcharge ? ` · +${naira(line.surcharge)}` : ""}
+                        {line.surcharge ? ` · ${signedMoney(money(line.surcharge), "+")}` : ""}
                       </Txt>
                     ) : null}
 
@@ -146,7 +148,7 @@ export default function CartScreen() {
 
                     <View style={styles.itemFooter}>
                       <Txt tone="strong" display size={16}>
-                        {naira((netPriceForLength(line.product, line.length) + (line.surcharge ?? 0)) * line.qty)}
+                        {money((netPriceForLength(line.product, line.length) + (line.surcharge ?? 0)) * line.qty)}
                       </Txt>
                       <View style={{ flex: 1 }} />
                       <Stepper compact qty={line.qty} onChange={(q) => setQty(key, q)} />
@@ -212,7 +214,7 @@ export default function CartScreen() {
                 Order summary
               </Txt>
 
-              <SummaryRow label="Subtotal" value={naira(subtotal)} />
+              <SummaryRow label="Subtotal" value={money(subtotal)} />
               <SummaryRow label="Delivery" value="At checkout" />
 
               <View style={styles.divider} />
@@ -222,7 +224,7 @@ export default function CartScreen() {
                   Total
                 </Txt>
                 <Txt tone="strong" display size={20}>
-                  {naira(total)}
+                  {money(total)}
                 </Txt>
               </View>
             </Card>
@@ -237,7 +239,7 @@ export default function CartScreen() {
               TOTAL
             </Txt>
             <Txt tone="strong" display size={20} style={{ marginTop: 2 }}>
-              {naira(total)}
+              {money(total)}
             </Txt>
           </View>
 

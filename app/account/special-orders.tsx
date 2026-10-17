@@ -17,7 +17,7 @@ import {
 import { Field } from "@/components/checkout-ui";
 import { GradientButton, Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
-import { naira } from "@/lib/format";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import {
   createSpecialOrder,
@@ -63,6 +63,7 @@ export default function SpecialOrdersScreen() {
   const s = useThemedStyles(makeS);
   const insets = useSafeAreaInsets();
   const { signedIn } = useAuth();
+  const money = useApproxMoney();
 
   const [rows, setRows] = useState<SpecialOrder[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -192,7 +193,7 @@ export default function SpecialOrdersScreen() {
       setRows((prev) => (prev ?? []).map((r) => (r.id === row.id ? res.special_order : r)));
       setNotice(
         action === "accept"
-          ? `Paid. Your wallet balance is now ${naira(res.wallet_balance)}.`
+          ? `Paid. Your wallet balance is now ${money(res.wallet_balance)}.`
           : "That request has been cancelled.",
       );
     } catch (err) {
@@ -412,7 +413,7 @@ export default function SpecialOrdersScreen() {
                       {row.amount_paid > 0 ? "YOU PAID" : "OUR QUOTE"}
                     </Txt>
                     <Txt tone="strong" display size={22} style={{ marginTop: 4 }}>
-                      {naira(row.amount_paid > 0 ? row.amount_paid : row.quote_amount)}
+                      {money(row.amount_paid > 0 ? row.amount_paid : row.quote_amount)}
                     </Txt>
                   </View>
                 ) : null}
@@ -430,11 +431,11 @@ export default function SpecialOrdersScreen() {
                         onPress={() => void respond(row, "accept")}
                         disabled={busy}
                         accessibilityRole="button"
-                        accessibilityLabel={`Accept and pay ${naira(row.quote_amount ?? 0)}`}
+                        accessibilityLabel={`Accept and pay ${money(row.quote_amount ?? 0)}`}
                         style={({ pressed }) => [s.action, s.actionStrong, pressed && { opacity: 0.75 }]}
                       >
                         <Text style={[s.actionText, { color: "#FFFFFF" }]}>
-                          {busy ? "Paying…" : `Accept · ${naira(row.quote_amount ?? 0)}`}
+                          {busy ? "Paying…" : `Accept · ${money(row.quote_amount ?? 0)}`}
                         </Text>
                       </Pressable>
                     ) : null}

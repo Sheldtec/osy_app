@@ -6,7 +6,8 @@ import { AccountShell, Empty, Failed, Loading, Panel, Pill } from "@/components/
 import { Field, Notice } from "@/components/checkout-ui";
 import { Txt } from "@/components/ui";
 import { claimCoupon, getCoupons, type CouponCard, type CouponWallet } from "@/lib/account-api";
-import { naira } from "@/lib/format";
+import { couponLabels } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import type { Theme } from "@/theme/theme";
 import { useTheme } from "@/theme/theme-context";
@@ -23,6 +24,7 @@ type Tab = "available" | "used" | "expired";
 
 export default function CouponsScreen() {
   const theme = useTheme();
+  const money = useApproxMoney();
   const [wallet, setWallet] = useState<CouponWallet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -59,7 +61,7 @@ export default function CouponsScreen() {
       setClaimed(
         res.already
           ? `${res.coupon.code} is already in your codes.`
-          : `${res.coupon.code} added — ${res.coupon.discount_label}.`,
+          : `${res.coupon.code} added — ${couponLabels(res.coupon, money).discount}.`,
       );
       setCode("");
       await load();
@@ -209,6 +211,17 @@ export default function CouponsScreen() {
 
 function CouponRow({ coupon }: { coupon: CouponCard }) {
   const theme = useTheme();
+  const money = useApproxMoney();
+  /*
+   * NOT `coupon.discount_label` / `coupon.condition_label`.
+   *
+   * Those arrive from the server with a Naira sign already inside the string,
+   * so they could never follow the shopper's chosen currency — this screen was
+   * the clearest instance of the bug. The server now also sends the raw
+   * `value`, `type` and `min_spend`, which is everything the two sentences are
+   * made of, so they are assembled here instead.
+   */
+  const { discount, condition } = couponLabels(coupon, money);
   const spent = coupon.status !== "available";
 
   return (
@@ -217,7 +230,7 @@ function CouponRow({ coupon }: { coupon: CouponCard }) {
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Txt tone="primary" display size={18}>
-              {coupon.discount_label}
+              {discount}
             </Txt>
             {coupon.badge ? <Pill label={coupon.badge} tone="warn" /> : null}
             {coupon.status === "used" ? <Pill label="Used" tone="mute" /> : null}
@@ -232,13 +245,13 @@ function CouponRow({ coupon }: { coupon: CouponCard }) {
 
           {coupon.condition_label ? (
             <Txt tone="body" size={9} style={{ marginTop: 6 }}>
-              {coupon.condition_label}
+              {condition}
             </Txt>
           ) : null}
 
           {coupon.min_spend ? (
             <Txt tone="body" size={9} style={{ marginTop: 4 }}>
-              Spend at least {naira(coupon.min_spend)}
+              Spend at least {money(coupon.min_spend)}
             </Txt>
           ) : null}
 

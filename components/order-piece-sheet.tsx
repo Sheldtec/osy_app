@@ -5,7 +5,8 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View
 import { Divide, Line, SectionLabel, Thumb } from "@/components/account-ui";
 import { GradientButton, Txt } from "@/components/ui";
 import { getProduct } from "@/lib/api";
-import { naira } from "@/lib/format";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import type { OrderItem } from "@/lib/account-api";
 import type { ProductDetail } from "@/lib/types";
 import type { Theme } from "@/theme/theme";
@@ -35,6 +36,7 @@ export function OrderPieceSheet({
 }) {
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const money = useApproxMoney();
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [looking, setLooking] = useState(false);
   /** The product is gone, archived, or unreachable — not an error to shout about. */
@@ -121,15 +123,15 @@ export function OrderPieceSheet({
           {/* ---- what was paid ---- */}
           <SectionLabel style={{ marginTop: 20 }}>WHAT YOU PAID</SectionLabel>
           <View style={{ marginTop: 10 }}>
-            <Line label="Unit price" value={naira(item.unit_price)} />
+            <Line label="Unit price" value={money(item.unit_price)} />
             {item.surcharge > 0 ? (
-              <Line label={prep || "Preparation"} value={`+ ${naira(item.surcharge)}`} />
+              <Line label={prep || "Preparation"} value={signedMoney(money(item.surcharge), "+")} />
             ) : prep ? (
               <Line label="Preparation" value={prep} />
             ) : null}
             <Line label="Quantity" value={String(item.qty)} />
             <Divide />
-            <Line label="Line total" value={naira(item.line_total)} strong />
+            <Line label="Line total" value={money(item.line_total)} strong />
           </View>
 
           {/* ---- the live product, when it is still there ---- */}

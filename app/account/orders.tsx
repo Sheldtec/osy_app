@@ -19,7 +19,6 @@ import { IconCalendar, IconUnits } from "@/components/icons";
 import { Txt } from "@/components/ui";
 import { getMyOrders, ORDER_BUCKETS, type Order, type OrderStatus } from "@/lib/account-api";
 import { ApiError } from "@/lib/http";
-import { naira } from "@/lib/format";
 import { useApproxMoney } from "@/lib/currency-context";
 import { useTheme } from "@/theme/theme-context";
 

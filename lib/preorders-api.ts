@@ -22,12 +22,20 @@ export interface Preorder {
   slug: string | null;
   image: string | null;
   /**
-   * Already-formatted display strings (length, colour, density, preparation).
-   *
-   * `preparation` arrives as a RENDERED label like "Hair wigging · Curled
-   * (+₦50,000)", not a code — never parse money back out of it.
+   * Display strings (length, colour, density, preparation label) — labels, not
+   * codes. They carry no money: the preparation entry used to arrive with the
+   * surcharge baked in as "(+₦50,000)", frozen in Naira and impossible to
+   * convert, and the API no longer does that.
    */
   variant: string[];
+  /** The preparation choice on its own, with no amount in it. */
+  preparation_label?: string | null;
+  /**
+   * The preparation add-on in NAIRA — a snapshot of what was agreed when the
+   * piece was reserved, not today's price for that option. 0 / absent means no
+   * add-on. Format it with `useApproxMoney()` like any other amount.
+   */
+  preparation_surcharge?: number | null;
   note: string | null;
   qty: number;
   unit_price: number;

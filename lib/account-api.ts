@@ -142,6 +142,15 @@ export interface CouponCard {
   id: number;
   code: string;
   type: "percent" | "fixed" | "free_shipping";
+  /**
+   * The raw discount amount in Naira (or the percentage, for `percent`).
+   *
+   * The two *_label strings below arrive from the server with a Naira sign
+   * already in them, so they cannot follow the shopper's chosen currency.
+   * This is the number they are built from — pass it to `couponLabels()` with
+   * a formatter and build the label on the client instead.
+   */
+  value: number | null;
   discount_label: string;
   condition_label: string | null;
   description: string | null;
@@ -274,6 +283,18 @@ export type HairProfile = Partial<Record<HairProfileField, string | null>>;
 export interface HairProfileOption {
   value: string;
   label: string;
+  /**
+   * Budget bands only: the band's numeric edges in NAIRA — null for an open
+   * end, both null for "No fixed budget".
+   *
+   * `value` here is also the STORED enum ("₦50,000 – ₦100,000" is literally
+   * what the column holds), so the server cannot reword it and must post back
+   * untouched. These numbers are how the band gets restated in the currency
+   * the shopper is reading in; `moneyBandLabel()` does that. Absent on every
+   * other field.
+   */
+  min?: number | null;
+  max?: number | null;
 }
 
 export interface HairProfileResponse {

@@ -17,6 +17,8 @@ import {
 import { GradientButton, Overline, Txt } from "@/components/ui";
 import { markOnboarded } from "@/lib/onboarding";
 import type { Theme } from "@/theme/theme";
+import { metaFor } from "@/lib/currency";
+import { useCurrency } from "@/lib/currency-context";
 import { useTheme, useThemedStyles } from "@/theme/theme-context";
 import { fonts, layout } from "@/theme/tokens";
 
@@ -27,17 +29,21 @@ import { fonts, layout } from "@/theme/tokens";
  * wordmark centred on it; then a white sheet with the welcome copy, the
  * language/currency pills and two calls to action.
  *
- * Two departures from the frame, both deliberate:
- *   · The currency pill reads ₦ NGN, not € EUR. This store is Naira-only
- *     (CLAUDE.md), so it is a statement of fact rather than a choice.
- *   · Neither pill opens a picker yet — there is one language and one currency
- *     — so tapping them says so instead of opening an empty menu.
+ * Two departures from the frame:
+ *   · The currency pill shows whatever currency is actually selected, and opens
+ *     the real picker. It used to be the literal text "₦  NGN" with a tap
+ *     message reading "Other currencies are coming" — true when this screen
+ *     was written, false since the picker shipped, and the first thing a
+ *     shopper who wanted dollars would have been told.
+ *   · The language pill still has nothing to open — there is one language —
+ *     so tapping it says so rather than opening an empty menu.
  */
 const GUTTER = layout.gutter;
 const PANEL_RATIO = 1; // the frame's panel is a square (440 × 440)
 
 export default function OnboardingScreen() {
   const theme = useTheme();
+  const { code } = useCurrency();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -106,11 +112,14 @@ export default function OnboardingScreen() {
             </Pressable>
 
             <Pressable
-              onPress={() => setNotice("Prices are in Naira. Other currencies are coming.")}
+              onPress={() => router.push("/account/currency")}
               accessibilityRole="button"
+              accessibilityLabel={`Currency: ${metaFor(code).name}. Change it.`}
               style={({ pressed }) => [styles.pill, { flex: 1 }, pressed && { opacity: 0.8 }]}
             >
-              <Text style={styles.pillText}>₦  NGN</Text>
+              <Text style={styles.pillText}>
+                {metaFor(code).symbol}  {code}
+              </Text>
               <View style={{ flex: 1 }} />
               <ChevronRight width={18} height={18} />
             </Pressable>

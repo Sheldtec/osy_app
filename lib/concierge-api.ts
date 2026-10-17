@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { request } from "./http";
+import type { CurrencyCode } from "./currency";
 
 /**
  * The storefront concierge — POST /concierge.
@@ -57,7 +58,21 @@ export interface ConciergeReply {
  */
 const REPLY_TIMEOUT_MS = 60_000;
 
-export async function askConcierge(messages: ConciergeTurn[]): Promise<ConciergeReply> {
+/**
+ * Ask the concierge a question.
+ *
+ * `currency` is the shopper's DISPLAY currency, and only a code goes over the
+ * wire — never a rate and never a converted amount. The server resolves the
+ * rate itself from the same service that prices a foreign-currency charge at
+ * checkout, and writes its prose in that currency with a leading "≈". Omit it
+ * and the reply is in Naira, which is what the shop actually charges either
+ * way. `Recommended()` keeps formatting the product cards client-side with
+ * `useApproxMoney()`; this only governs the sentences.
+ */
+export async function askConcierge(
+  messages: ConciergeTurn[],
+  currency?: CurrencyCode,
+): Promise<ConciergeReply> {
   // Only the most recent turns are sent. The server caps the array at
   // MAX_TURNS and 422s above it, and the cap has to be applied from the END —
   // trimming the newest messages would send the shopper's question without
@@ -69,7 +84,7 @@ export async function askConcierge(messages: ConciergeTurn[]): Promise<Concierge
 
   return request<ConciergeReply>("/concierge", {
     method: "POST",
-    body: { messages: trimmed },
+    body: { messages: trimmed, currency: currency ?? "NGN" },
     authOptional: true,
     timeoutMs: REPLY_TIMEOUT_MS,
   });

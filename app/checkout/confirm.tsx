@@ -16,7 +16,7 @@ import {
   type CryptoInstructions,
   type PaymentStatus,
 } from "@/lib/checkout-api";
-import { naira } from "@/lib/format";
+import { useApproxMoney } from "@/lib/currency-context";
 import type { Theme } from "@/theme/theme";
 import { useTheme } from "@/theme/theme-context";
 import { layout } from "@/theme/tokens";
@@ -47,6 +47,7 @@ const RETRY_MS = [2000, 3000, 5000, 10_000];
 
 export default function ConfirmStep() {
   const theme = useTheme();
+  const money = useApproxMoney();
   const insets = useSafeAreaInsets();
   const cart = useCart();
   const { pending, setPending, reset, ready } = useCheckout();
@@ -225,9 +226,9 @@ export default function ConfirmStep() {
   const amount = status
     ? status.charge_currency && status.charge_currency !== "NGN"
       ? `${status.charge_amount} ${status.charge_currency}`
-      : naira(status.total)
+      : money(status.total)
     : pending
-      ? naira(pending.total)
+      ? money(pending.total)
       : "";
 
   /* ---------------- paid ---------------- */

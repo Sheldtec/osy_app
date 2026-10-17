@@ -15,7 +15,8 @@ import {
 } from "react-native";
 
 import { Txt } from "@/components/ui";
-import { naira } from "@/lib/format";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import type { Theme } from "@/theme/theme";
 import { useTheme, useThemedStyles } from "@/theme/theme-context";
 import { ctaGradient, fonts, layout, shadow } from "@/theme/tokens";
@@ -344,6 +345,7 @@ export function TierCards<T extends string>({
   onChange: (id: T) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const money = useApproxMoney();
   return (
     <View style={{ flexDirection: "row", gap: 8 }}>
       {options.map((o) => {
@@ -353,7 +355,7 @@ export function TierCards<T extends string>({
             key={o.id}
             accessibilityRole="radio"
             accessibilityState={{ selected: active }}
-            accessibilityLabel={`${o.label}, ${o.price === 0 ? "free" : naira(o.price)}`}
+            accessibilityLabel={`${o.label}, ${o.price === 0 ? "free" : money(o.price)}`}
             onPress={() => onChange(o.id)}
             style={({ pressed }) => [styles.tier, pressed && { opacity: 0.9 }]}
           >
@@ -367,7 +369,7 @@ export function TierCards<T extends string>({
             ) : null}
             <Text style={[styles.tierLabel, active && { color: "#FFFFFF" }]}>{o.label}</Text>
             <Text style={[styles.tierPrice, active && { color: "#E2D7EA" }]}>
-              {o.price === 0 ? "Free" : `+${naira(o.price)}`}
+              {o.price === 0 ? "Free" : signedMoney(money(o.price), "+")}
             </Text>
           </Pressable>
         );
@@ -517,6 +519,7 @@ export function PayBar({
   onPress: () => void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const money = useApproxMoney();
   const off = Boolean(disabled) || Boolean(busy);
 
   return (
@@ -534,7 +537,7 @@ export function PayBar({
             numberOfLines={1}
             adjustsFontSizeToFit
           >
-            {naira(total)}
+            {money(total)}
           </Txt>
         ) : null}
         {totalNote ? (

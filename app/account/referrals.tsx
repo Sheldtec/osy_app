@@ -14,7 +14,8 @@ import {
 } from "@/components/account-ui";
 import { GradientButton, Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
-import { naira } from "@/lib/format";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import { getReferrals, type ReferralRow, type Referrals } from "@/lib/referrals-api";
 import type { Theme } from "@/theme/theme";
@@ -46,6 +47,7 @@ const STATUS: Record<ReferralRow["status"], { label: string; tone: "ok" | "warn"
 export default function ReferralsScreen() {
   const s = useThemedStyles(makeS);
   const { signedIn } = useAuth();
+  const money = useApproxMoney();
 
   const [data, setData] = useState<Referrals | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +91,7 @@ export default function ReferralsScreen() {
       title="Invite a friend"
       subtitle={
         data
-          ? `${data.stats.invited} invited · ${naira(data.stats.earned)} earned`
+          ? `${data.stats.invited} invited · ${money(data.stats.earned)} earned`
           : "Share your code, earn store credit."
       }
       onRefresh={() => {
@@ -156,14 +158,14 @@ export default function ReferralsScreen() {
             />
             <Step
               n={2}
-              text={`They place their first order of ${naira(data.min_order)} or more, and pay for it.`}
+              text={`They place their first order of ${money(data.min_order)} or more, and pay for it.`}
             />
             <Step
               n={3}
               text={
                 data.referee_amount > 0
-                  ? `You get ${naira(data.reward_amount)} in store credit, and they get ${naira(data.referee_amount)}.`
-                  : `${naira(data.reward_amount)} in store credit lands in your wallet.`
+                  ? `You get ${money(data.reward_amount)} in store credit, and they get ${money(data.referee_amount)}.`
+                  : `${money(data.reward_amount)} in store credit lands in your wallet.`
               }
               last
             />
@@ -185,7 +187,7 @@ export default function ReferralsScreen() {
             <View style={s.earned}>
               <Text style={s.earnedLabel}>EARNED SO FAR</Text>
               <Txt tone="strong" display size={26} style={{ marginTop: 4 }}>
-                {naira(data.stats.earned)}
+                {money(data.stats.earned)}
               </Txt>
             </View>
           </Panel>
@@ -223,7 +225,7 @@ export default function ReferralsScreen() {
                 {/* Only ever the amount actually paid — never today's setting. */}
                 {row.reward > 0 ? (
                   <Txt tone="strong" display size={17} style={{ marginTop: 10 }}>
-                    + {naira(row.reward)}
+                    {signedMoney(money(row.reward), "+")}
                   </Txt>
                 ) : null}
               </Panel>

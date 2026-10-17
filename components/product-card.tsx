@@ -5,7 +5,6 @@ import { Pressable, StyleSheet, Text, View, type DimensionValue } from "react-na
 import { HairImage } from "@/components/hair-image";
 import { AddCircle, IconHeart, IconHeartFilled, photoFor } from "@/components/icons";
 import { Txt } from "@/components/ui";
-import { naira } from "@/lib/format";
 import { useWishlist } from "@/lib/wishlist";
 import { useApproxMoney } from "@/lib/currency-context";
 import { displayPrice } from "@/lib/product-variant";

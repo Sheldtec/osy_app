@@ -12,7 +12,7 @@ import {
   payVipFee,
   type VipStatus,
 } from "@/lib/account-api";
-import { naira } from "@/lib/format";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import type { Theme } from "@/theme/theme";
 import { useTheme } from "@/theme/theme-context";
@@ -32,6 +32,7 @@ import { useTheme } from "@/theme/theme-context";
 export default function VipScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const money = useApproxMoney();
 
   const [vip, setVip] = useState<VipStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -182,7 +183,7 @@ export default function VipScreen() {
             <Panel>
               <SectionLabel>ELIGIBILITY</SectionLabel>
               <Txt tone="body" size={10} style={{ marginTop: 10, lineHeight: 15 }}>
-                Membership opens once you’ve spent {naira(vip.min_spend)} with us.
+                Membership opens once you’ve spent {money(vip.min_spend)} with us.
               </Txt>
 
               <View style={track(theme)}>
@@ -191,10 +192,10 @@ export default function VipScreen() {
 
               <View style={{ flexDirection: "row", marginTop: 8 }}>
                 <Txt tone="strong" size={11} weight="medium" style={{ flex: 1 }}>
-                  {naira(vip.spend)} so far
+                  {money(vip.spend)} so far
                 </Txt>
                 <Txt tone="body" size={9}>
-                  {vip.eligible ? "Eligible" : `${naira(Math.max(0, vip.min_spend - vip.spend))} to go`}
+                  {vip.eligible ? "Eligible" : `${money(Math.max(0, vip.min_spend - vip.spend))} to go`}
                 </Txt>
               </View>
             </Panel>
@@ -232,11 +233,11 @@ export default function VipScreen() {
               {feeDue ? (
                 <View style={{ marginTop: 14 }}>
                   <Notice tone="info">
-                    Approved. The membership fee of {naira(app.fee_due ?? 0)} comes out of your
+                    Approved. The membership fee of {money(app.fee_due ?? 0)} comes out of your
                     wallet to finish joining.
                   </Notice>
                   <GradientButton
-                    label={paying ? "Paying…" : `Pay ${naira(app.fee_due ?? 0)} from wallet`}
+                    label={paying ? "Paying…" : `Pay ${money(app.fee_due ?? 0)} from wallet`}
                     disabled={paying}
                     style={{ marginTop: 14 }}
                     onPress={() => void payFee()}
@@ -256,7 +257,7 @@ export default function VipScreen() {
               {app.cancelled_at
                 ? `Your earlier application was withdrawn${app.cancel_reason ? ` — ${app.cancel_reason}` : ""}.`
                 : `Your earlier application wasn’t approved${app.decision_note ? ` — ${app.decision_note}` : ""}.`}
-              {app.fee_refunded ? ` ${naira(app.fee_refunded)} was returned to your wallet.` : ""}
+              {app.fee_refunded ? ` ${money(app.fee_refunded)} was returned to your wallet.` : ""}
             </Notice>
           ) : null}
 
@@ -265,7 +266,7 @@ export default function VipScreen() {
             <Panel>
               <SectionLabel>APPLY</SectionLabel>
               <Txt tone="body" size={9} style={{ marginTop: 10, lineHeight: 14 }}>
-                Tell us about your business. There’s a {naira(vip.fee)} membership fee, paid from
+                Tell us about your business. There’s a {money(vip.fee)} membership fee, paid from
                 your wallet only after you’re approved.
               </Txt>
 
@@ -328,7 +329,7 @@ export default function VipScreen() {
 
               {!vip.eligible ? (
                 <Txt tone="body" size={9} center style={{ marginTop: 14, lineHeight: 14 }}>
-                  You can send this now — we’ll hold it until you reach {naira(vip.min_spend)}.
+                  You can send this now — we’ll hold it until you reach {money(vip.min_spend)}.
                 </Txt>
               ) : null}
             </Panel>

@@ -106,3 +106,96 @@ export function formatMoney(
  */
 export const CHARGED_IN_NAIRA =
   "Prices are converted for display. You’re charged in Naira (₦).";
+
+/**
+ * A price BAND's label, built on the client so it follows the chosen currency.
+ *
+ * Some of the shop's option lists are money ranges whose `value` is also the
+ * stored enum — the hair profile's budget bands, which the column holds and
+ * which must be posted back byte-identical. The server therefore cannot
+ * reword them, and sends the numeric edges (`min`/`max`, Naira, null for an
+ * open end) beside the Naira wording instead. This turns those numbers back
+ * into a sentence.
+ *
+ * `format` is the caller's formatter — `useApproxMoney()` in a component, or
+ * `naira` to get the server's own wording back. Falls back to `label` when
+ * there is nothing to format ("No fixed budget", or a band the server sent
+ * without bounds), so it is safe to run over a whole option list.
+ *
+ * A converted two-ended band carries ONE leading "≈" rather than one per
+ * edge: the marker belongs to the range, and "≈ $33 – ≈ $65" reads as a
+ * mistake.
+ */
+export function moneyBandLabel(
+  band: { label: string; min?: number | null; max?: number | null },
+  format: (amountInNaira: number) => string,
+): string {
+  const min = typeof band.min === "number" ? band.min : null;
+  const max = typeof band.max === "number" ? band.max : null;
+
+  if (min === null && max === null) return band.label;
+  if (min === null) return `Under ${format(max as number)}`;
+  if (max === null) return `Above ${format(min)}`;
+
+  const lo = format(min);
+  const hi = format(max);
+
+  return `${lo} – ${hi.startsWith("≈ ") ? hi.slice(2) : hi}`;
+}
+
+/**
+ * A coupon's two labels, built on the client so they follow the chosen currency.
+ *
+ * The API also sends `discount_label` and `condition_label` ready-made, but
+ * those bake a Naira sign into the string — which is exactly why the shop
+ * still read "₦5,000 OFF" after someone switched to dollars. The server now
+ * sends `value` alongside `type` and `min_spend`, which is everything the
+ * labels are made of, so the client can format them itself.
+ *
+ * `format` is the caller's formatter — `useApproxMoney()` in a component. Pass
+ * `naira` instead and you get the server's exact wording back.
+ *
+ * Percent and free-shipping labels carry no money at all; they are built here
+ * anyway so one function owns the whole vocabulary and no screen has to decide
+ * which of the two sources to trust.
+ */
+export function couponLabels(
+  coupon: {
+    type: "percent" | "fixed" | "free_shipping";
+    value?: number | null;
+    min_spend?: number | null;
+  },
+  format: (amountInNaira: number) => string,
+): { discount: string; condition: string } {
+  const value = coupon.value ?? 0;
+
+  const discount =
+    coupon.type === "percent"
+      ? `${value}% OFF`
+      : coupon.type === "fixed"
+        ? `${format(value)} OFF`
+        : coupon.type === "free_shipping"
+          ? "FREE SHIPPING"
+          : "DISCOUNT";
+
+  const min = coupon.min_spend ?? 0;
+  const condition = min > 0 ? `Over ${format(min)}` : "For any order";
+
+  return { discount, condition };
+}
+
+/**
+ * Attach a +/- sign to an already-formatted amount.
+ *
+ * `formatMoney` puts "≈ " in front of a CONVERTED figure, so writing the sign
+ * as a separate piece of text gives "+≈ $3.76" - the approximation marker
+ * wedged between the sign and its number. The marker qualifies the whole
+ * amount, so it stays in front and the sign moves inside it:
+ *
+ *   "+₦35,000"  (Naira, unchanged)      "≈ +$3.76"  (converted)
+ */
+export function signedMoney(formatted: string, sign: "+" | "−"): string {
+  return formatted.startsWith("≈ ")
+    ? `≈ ${sign}${formatted.slice(2)}`
+    : `${sign}${formatted}`;
+}

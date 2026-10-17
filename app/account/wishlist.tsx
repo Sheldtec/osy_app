@@ -3,7 +3,6 @@ import { Pressable, View } from "react-native";
 
 import { AccountShell, Empty, Loading, Panel, Thumb } from "@/components/account-ui";
 import { Txt } from "@/components/ui";
-import { naira } from "@/lib/format";
 import { useApproxMoney } from "@/lib/currency-context";
 import { useWishlist, type WishItem } from "@/lib/wishlist";
 import type { Theme } from "@/theme/theme";

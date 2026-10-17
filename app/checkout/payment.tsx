@@ -31,6 +31,8 @@ import {
   type PaymentMethodId,
   type PaymentMethods,
 } from "@/lib/checkout-api";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import { naira } from "@/lib/format";
 import { netPriceForLength } from "@/lib/product-variant";
 import { getWallet } from "@/lib/wallet";
@@ -64,6 +66,8 @@ export default function PaymentStep() {
   const cart = useCart();
   const { user, loading: authLoading, signedOut } = useCheckoutAuth();
   const { draft, ready, set, addressComplete, pending, setPending } = useCheckout();
+  const money = useApproxMoney();
+  const { code: currency } = useCurrency();
 
   const [methods, setMethods] = useState<PaymentMethods | null>(null);
   const [methodsLoading, setMethodsLoading] = useState(true);
@@ -160,8 +164,8 @@ export default function PaymentStep() {
           balance === null
             ? "Store credit"
             : walletShort
-              ? `Balance ${naira(balance)} — ${naira(total - balance)} short`
-              : `Balance ${naira(balance)}`,
+              ? `Balance ${money(balance)} — ${money(total - balance)} short`
+              : `Balance ${money(balance)}`,
         available: balance !== null && !walletShort,
         icon: <IconWalletPay width={20} height={20} color={theme.textInk.body} />,
       },
@@ -180,7 +184,7 @@ export default function PaymentStep() {
         icon: null,
       },
     ];
-  }, [methods, balance, total]);
+  }, [methods, balance, total, money]);
 
   // Pick the first method that actually works, once, rather than defaulting to
   // one the server would refuse.
@@ -476,7 +480,7 @@ export default function PaymentStep() {
           {couponState ? (
             <View style={{ marginTop: 10 }}>
               <Notice tone="success">
-                {couponState.label} applied — you save {naira(discount)}.
+                {couponState.label} applied — you save {money(discount)}.
               </Notice>
             </View>
           ) : null}
@@ -491,7 +495,7 @@ export default function PaymentStep() {
             <View key={`${l.product.id}-${l.length ?? ""}-${l.preparation ?? ""}`} style={{ marginBottom: 10 }}>
               <SummaryRow
                 label={`${l.product.name}${l.qty > 1 ? ` × ${l.qty}` : ""}`}
-                value={naira((netPriceForLength(l.product, l.length) + (l.surcharge ?? 0)) * l.qty)}
+                value={money((netPriceForLength(l.product, l.length) + (l.surcharge ?? 0)) * l.qty)}
               />
               {l.length || l.colour || l.preparationTitle ? (
                 <Txt tone="faint" size={11} style={{ marginTop: 1 }}>
@@ -501,18 +505,32 @@ export default function PaymentStep() {
             </View>
           ))}
           <Divider />
-          <SummaryRow label="Subtotal" value={naira(cart.subtotal)} />
+          <SummaryRow label="Subtotal" value={money(cart.subtotal)} />
           <SummaryRow
             label={draft.method === "express" ? "Express delivery" : draft.method === "pickup" ? "Pickup" : "Delivery"}
-            value={deliveryFee === null ? "—" : deliveryFee === 0 ? "Free" : naira(deliveryFee)}
+            value={deliveryFee === null ? "—" : deliveryFee === 0 ? "Free" : money(deliveryFee)}
             tone={deliveryFee === 0 ? "success" : "body"}
           />
-          {packagingFee > 0 ? <SummaryRow label="Packaging" value={naira(packagingFee)} /> : null}
+          {packagingFee > 0 ? <SummaryRow label="Packaging" value={money(packagingFee)} /> : null}
           {discount > 0 ? (
-            <SummaryRow label={`Discount (${couponState?.code})`} value={`− ${naira(discount)}`} tone="success" />
+            <SummaryRow label={`Discount (${couponState?.code})`} value={signedMoney(money(discount), "−")} tone="success" />
           ) : null}
           <Divider />
-          <SummaryRow label="Total" value={naira(total)} strong />
+          <SummaryRow label="Total" value={money(total)} strong />
+          {/*
+           * The bridge to what the gateway will actually take.
+           *
+           * Every figure on this screen now follows the shopper's chosen
+           * currency, the Pay button included — so on a non-Naira setting this
+           * line is the ONLY place the real charge appears. Without it the
+           * gateway's own page is the first time anyone sees a Naira amount,
+           * which is the wrong moment to learn it.
+           */}
+          {currency !== "NGN" ? (
+            <Txt tone="body" size={11} style={{ marginTop: 8 }}>
+              Charged in {naira(total)}
+            </Txt>
+          ) : null}
           <Txt tone="faint" size={11} style={{ marginTop: 8, lineHeight: 16 }}>
             The shop prices every order itself. If anything differs you’ll see it before paying.
           </Txt>

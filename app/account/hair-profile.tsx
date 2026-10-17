@@ -15,6 +15,8 @@ import {
   type HairProfileOption,
   type HairProfileField,
 } from "@/lib/account-api";
+import { moneyBandLabel } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 
 
@@ -31,6 +33,10 @@ import { ApiError } from "@/lib/http";
  */
 export default function HairProfileScreen() {
   const insets = useSafeAreaInsets();
+  // Above every early return, because this screen has two of them. Only the
+  // budget bands use it, and only to READ: what gets saved is the server's
+  // own Naira string.
+  const approx = useApproxMoney();
 
   const [values, setValues] = useState<HairProfile>({});
   const [options, setOptions] = useState<Record<string, HairProfileOption[]>>({});
@@ -87,7 +93,17 @@ export default function HairProfileScreen() {
   }
 
   function field(f: HairProfileField) {
-    const choices = options[f] ?? [];
+    // An option that carries numeric bounds is a money band (the budget
+    // field), and its Naira label is restated in the shopper's currency. The
+    // VALUE is left exactly as the server sent it — it is the stored enum and
+    // goes back verbatim, so only the wording changes. Everything else is
+    // passed through untouched, labels and all.
+    const choices = (options[f] ?? []).map((o) =>
+      typeof o.min === "number" || typeof o.max === "number"
+        ? { ...o, label: moneyBandLabel(o, approx) }
+        : o,
+    );
+
     return (
       <SelectField
         account

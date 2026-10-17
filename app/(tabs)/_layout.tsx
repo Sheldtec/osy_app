@@ -1,5 +1,7 @@
 import { Tabs } from "expo-router";
 
+import { ConciergeFab } from "@/components/concierge-fab";
+import { ScrollRevealProvider } from "@/lib/scroll-reveal";
 import { GlassNav } from "@/components/glass-nav";
 
 /**
@@ -22,22 +24,45 @@ import { GlassNav } from "@/components/glass-nav";
  * draw the bar over its own checkout.
  */
 const NAV_HIDDEN_ON = ["cart"];
+
+/**
+ * Tabs the concierge bubble stays off.
+ *
+ * `cart` ends in a total and a "Secure checkout" button in the bottom-right —
+ * exactly where the bubble sits, and exactly the control the screen exists for.
+ * `community` is a full-screen conversation whose message composer owns that
+ * corner, and which hides the nav for the same reason.
+ *
+ * Hidden rather than nudged aside: an offset is a guess about content that will
+ * change, and the website already shipped this mistake — see the note in
+ * `components/concierge-fab.tsx`.
+ */
+const CONCIERGE_HIDDEN_ON = ["cart", "community"];
 export default function TabsLayout() {
   return (
-    <Tabs
-      tabBar={(props) => {
-        const active = props.state.routes[props.state.index]?.name;
+    // Wraps the navigator, so it is above BOTH the screens that report their
+    // scrolling and the `tabBar` that renders the bubble reading it.
+    <ScrollRevealProvider>
+      <Tabs
+        tabBar={(props) => {
+          const active = props.state.routes[props.state.index]?.name ?? "";
 
-        return NAV_HIDDEN_ON.includes(active ?? "") ? null : <GlassNav {...props} />;
-      }}
-      screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: "transparent" } }}
-    >
-      <Tabs.Screen name="index" options={{ title: "Home" }} />
-      <Tabs.Screen name="shop" options={{ title: "Shop" }} />
-      <Tabs.Screen name="cart" options={{ title: "Cart" }} />
-      <Tabs.Screen name="community" options={{ title: "Community" }} />
-      <Tabs.Screen name="wallet" options={{ title: "Wallet", href: null }} />
-      <Tabs.Screen name="profile" options={{ title: "Account" }} />
-    </Tabs>
+          return (
+            <>
+              {CONCIERGE_HIDDEN_ON.includes(active) ? null : <ConciergeFab />}
+              {NAV_HIDDEN_ON.includes(active) ? null : <GlassNav {...props} />}
+            </>
+          );
+        }}
+        screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: "transparent" } }}
+      >
+        <Tabs.Screen name="index" options={{ title: "Home" }} />
+        <Tabs.Screen name="shop" options={{ title: "Shop" }} />
+        <Tabs.Screen name="cart" options={{ title: "Cart" }} />
+        <Tabs.Screen name="community" options={{ title: "Community" }} />
+        <Tabs.Screen name="wallet" options={{ title: "Wallet", href: null }} />
+        <Tabs.Screen name="profile" options={{ title: "Account" }} />
+      </Tabs>
+    </ScrollRevealProvider>
   );
 }

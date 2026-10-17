@@ -42,10 +42,80 @@ export interface AppNotification {
    *
    * Null whenever the emitter passed nothing (every thrift notice, every admin
    * broadcast), and the keys differ per emitter — so read defensively.
+   *
+   * Two reserved keys may also be here: `_title_template` and `_body_template`
+   * (see `notificationText`).
    */
   data: Record<string, unknown> | null;
   read: boolean;
   at: string | null;
+}
+
+/** Reserved `data` keys carrying the money-less sentence templates. */
+const TITLE_TEMPLATE = "_title_template";
+const BODY_TEMPLATE = "_body_template";
+
+/** A `{data_key}` placeholder standing in for one Naira figure. */
+const TOKEN = /\{([A-Za-z0-9_]+)\}/g;
+
+/**
+ * Re-render one sentence with the shopper's chosen currency.
+ *
+ * `title` and `body` arrive with Naira baked into the prose, because that is
+ * what the website shows and what every older build of this app reads. When the
+ * server also sent a template — the same sentence with each figure replaced by
+ * a `{key}` token naming the `data` key that holds the Naira integer — we
+ * rebuild the sentence through the converting formatter instead.
+ *
+ * It is all or nothing: if any token names a key that is missing or not a
+ * number, the stored sentence is returned untouched rather than a half-rendered
+ * one. Notifications that predate the templates have no `data` keys for this,
+ * so they simply keep rendering as they always did.
+ */
+function renderTemplate(
+  template: unknown,
+  data: Record<string, unknown> | null,
+  stored: string,
+  money: (amountInNaira: number) => string,
+): string {
+  if (typeof template !== "string" || !data) return stored;
+
+  let resolved = true;
+
+  const out = template.replace(TOKEN, (match, key: string) => {
+    const raw = data[key];
+    const amount = typeof raw === "string" ? Number(raw) : raw;
+
+    if (typeof amount !== "number" || !Number.isFinite(amount)) {
+      resolved = false;
+
+      return match;
+    }
+
+    return money(amount);
+  });
+
+  // `out === template` means there was no token to substitute, so the template
+  // had nothing to add over the sentence the server already wrote.
+  return resolved && out !== template ? out : stored;
+}
+
+/**
+ * What to actually show for a notification — money in the chosen currency
+ * where the server gave us a template for it, the stored wording otherwise.
+ *
+ * `money` is `useApproxMoney()`, called at the top level of the component.
+ */
+export function notificationText(
+  n: AppNotification,
+  money: (amountInNaira: number) => string,
+): { title: string; body: string | null } {
+  return {
+    title: renderTemplate(n.data?.[TITLE_TEMPLATE], n.data, n.title, money),
+    body: n.body === null
+      ? null
+      : renderTemplate(n.data?.[BODY_TEMPLATE], n.data, n.body, money),
+  };
 }
 
 export interface NotificationPage {

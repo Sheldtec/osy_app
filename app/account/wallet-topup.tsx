@@ -10,6 +10,7 @@ import { AccountShell, Empty, Loading, Panel, SectionLabel } from "@/components/
 import { Field } from "@/components/checkout-ui";
 import { GradientButton, Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import { naira } from "@/lib/format";
 import { ApiError } from "@/lib/http";
 import { getPaymentMethods, type PaymentMethods } from "@/lib/checkout-api";
@@ -56,6 +57,8 @@ export default function WalletTopupScreen() {
   const s = useThemedStyles(makeS);
   const insets = useSafeAreaInsets();
   const { signedIn } = useAuth();
+  const money = useApproxMoney();
+  const { code: currency } = useCurrency();
 
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<TopupMethod>("flutterwave");
@@ -96,7 +99,7 @@ export default function WalletTopupScreen() {
     try {
       const status = await verifyTopup(reference);
       if (status.paid) {
-        setOutcome(`${naira(status.total)} is in your wallet.`);
+        setOutcome(`${money(status.total)} is in your wallet.`);
 
         return;
       }
@@ -111,7 +114,7 @@ export default function WalletTopupScreen() {
           : "We couldn’t check that payment. Your wallet will show it once it clears.",
       );
     }
-  }, []);
+  }, [money]);
 
   async function go() {
     setError(null);
@@ -190,7 +193,7 @@ export default function WalletTopupScreen() {
         bank ? null : (
           <View style={[s.footer, { paddingBottom: Math.max(insets.bottom, 12) + 16 }]}>
             <GradientButton
-              label={busy ? "Opening…" : value > 0 ? `Add ${naira(value)}` : "Add money"}
+              label={busy ? "Opening…" : value > 0 ? `Add ${money(value)}` : "Add money"}
               disabled={busy || !valid}
               onPress={() => void go()}
             />
@@ -300,6 +303,18 @@ export default function WalletTopupScreen() {
             <Txt tone="body" size={9} style={{ marginTop: 14 }}>
               Between {naira(TOPUP_MIN)} and {naira(TOPUP_MAX)} per top-up.
             </Txt>
+            {/*
+ * The amount FIELD stays in Naira and so do its bounds: the server checks
+ * the typed number against its own minimum and ceiling, and an approximate
+ * figure cannot be posted. That leaves a Naira input on a screen where
+ * everything else converted, so this line says what the typed amount is
+ * worth — without ever becoming the number that gets sent.
+ */}
+            {currency !== "NGN" && value > 0 ? (
+              <Txt tone="faint" size={9} style={{ marginTop: 4 }}>
+                {naira(value)} is {money(value)} at today’s rate.
+              </Txt>
+            ) : null}
           </Panel>
 
           <SectionLabel>HOW YOU’LL PAY</SectionLabel>

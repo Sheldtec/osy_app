@@ -15,6 +15,7 @@ import {
 import { Field } from "@/components/checkout-ui";
 import { GradientButton, Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import { naira } from "@/lib/format";
 import { ApiError } from "@/lib/http";
 import { cancelWithdrawal, getWallet, requestWithdrawal } from "@/lib/wallet";
@@ -54,6 +55,8 @@ const STATUS: Record<
 export default function WalletWithdrawScreen() {
   const theme = useTheme();
   const s = useThemedStyles(makeS);
+  const money = useApproxMoney();
+  const { code: currency } = useCurrency();
   const insets = useSafeAreaInsets();
   const { signedIn } = useAuth();
 
@@ -188,7 +191,7 @@ export default function WalletWithdrawScreen() {
               {naira(ceiling)}
             </Txt>
             <Txt tone="body" size={10} style={{ marginTop: 10, lineHeight: 15 }}>
-              Your balance is {naira(wallet.balance)}, of which {naira(wallet.income_earned)} has
+              Your balance is {money(wallet.balance)}, of which {money(wallet.income_earned)} has
               been earned from referrals and resale. Only earned income can be cashed out — store
               credit is spent in the shop.
             </Txt>
@@ -210,7 +213,7 @@ export default function WalletWithdrawScreen() {
                 Nothing to cash out yet
               </Txt>
               <Txt tone="body" size={10} style={{ marginTop: 6, lineHeight: 15 }}>
-                You need at least {naira(min)} of earned income. Refer a friend, or sell a piece on
+                You need at least {money(min)} of earned income. Refer a friend, or sell a piece on
                 Thrift, and it will appear here.
               </Txt>
             </Panel>
@@ -228,6 +231,18 @@ export default function WalletWithdrawScreen() {
                   hint={`Between ${naira(min)} and ${naira(ceiling)}.`}
                   error={fields.amount}
                 />
+                {/*
+ * The amount FIELD stays in Naira and so do its bounds: the server checks
+ * the typed number against its own minimum and ceiling, and an approximate
+ * figure cannot be posted. That leaves a Naira input on a screen where
+ * everything else converted, so this line says what the typed amount is
+ * worth — without ever becoming the number that gets sent.
+ */}
+                {currency !== "NGN" && value > 0 ? (
+                  <Txt tone="faint" size={9} style={{ marginTop: 6 }}>
+                    {naira(value)} is {money(value)} at today’s rate.
+                  </Txt>
+                ) : null}
               </Panel>
 
               <SectionLabel>WHERE IT GOES</SectionLabel>
@@ -300,7 +315,7 @@ export default function WalletWithdrawScreen() {
                   <Panel key={w.id}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
                       <Txt tone="strong" display size={17} style={{ flex: 1 }}>
-                        {naira(w.amount)}
+                        {money(w.amount)}
                       </Txt>
                       <Pill label={st.label} tone={st.tone} />
                     </View>
@@ -323,7 +338,7 @@ export default function WalletWithdrawScreen() {
                       <Pressable
                         onPress={() => void withdraw(w.id)}
                         accessibilityRole="button"
-                        accessibilityLabel={`Cancel the ${naira(w.amount)} cash-out`}
+                        accessibilityLabel={`Cancel the ${money(w.amount)} cash-out`}
                         style={({ pressed }) => [s.cancel, pressed && { opacity: 0.7 }]}
                       >
                         <Text style={s.cancelText}>Cancel this request</Text>

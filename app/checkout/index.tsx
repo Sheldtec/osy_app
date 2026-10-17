@@ -19,7 +19,7 @@ import { Overline, Txt } from "@/components/ui";
 import { useCart } from "@/lib/cart";
 import { FIELD_LABEL, useCheckout, type DeliveryMethod, type PackagingTier } from "@/lib/checkout";
 import { getPickupOption, getShippingQuote, type PickupOption, type ShippingQuote } from "@/lib/checkout-api";
-import { naira } from "@/lib/format";
+import { useApproxMoney } from "@/lib/currency-context";
 import { STATE_OPTIONS } from "@/lib/geo";
 import { layout } from "@/theme/tokens";
 
@@ -50,6 +50,7 @@ const PACKAGING: { id: PackagingTier; label: string; price: number }[] = [
 export default function DeliveryStep() {
   const insets = useSafeAreaInsets();
   const cart = useCart();
+  const money = useApproxMoney();
   const { user, loading: authLoading, signedOut } = useCheckoutAuth();
   const { draft, ready, set, addressComplete, missing } = useCheckout();
   // The bag forwards whatever was typed into its promo field.
@@ -310,14 +311,14 @@ export default function DeliveryStep() {
         <ChoiceRow
           title="Standard delivery"
           sub={quote?.label ? `${quote.label} · 5–7 working days` : "5–7 working days"}
-          trailing={quote ? naira(quote.fee) : quoting ? "…" : undefined}
+          trailing={quote ? money(quote.fee) : quoting ? "…" : undefined}
           selected={draft.method === "standard"}
           onPress={() => set({ method: "standard" })}
         />
         <ChoiceRow
           title="Express delivery"
           sub="2–3 working days"
-          trailing={quote ? naira(quote.express_fee) : quoting ? "…" : undefined}
+          trailing={quote ? money(quote.express_fee) : quoting ? "…" : undefined}
           selected={draft.method === "express"}
           onPress={() => set({ method: "express" })}
         />
@@ -353,16 +354,16 @@ export default function DeliveryStep() {
       <Overline style={ov}>ORDER SUMMARY</Overline>
       <View style={{ paddingHorizontal: layout.gutter }}>
         <SectionCard>
-          <SummaryRow label={`Bag (${cart.count} ${cart.count === 1 ? "item" : "items"})`} value={naira(cart.subtotal)} />
+          <SummaryRow label={`Bag (${cart.count} ${cart.count === 1 ? "item" : "items"})`} value={money(cart.subtotal)} />
           <SummaryRow
             label="Delivery"
-            value={deliveryFee === null ? "—" : deliveryFee === 0 ? "Free" : naira(deliveryFee)}
+            value={deliveryFee === null ? "—" : deliveryFee === 0 ? "Free" : money(deliveryFee)}
             tone={deliveryFee === 0 ? "success" : "body"}
             pending={quoting}
           />
-          {packagingFee > 0 ? <SummaryRow label="Packaging" value={naira(packagingFee)} /> : null}
+          {packagingFee > 0 ? <SummaryRow label="Packaging" value={money(packagingFee)} /> : null}
           <Divider />
-          <SummaryRow label="Total" value={naira(total)} strong />
+          <SummaryRow label="Total" value={money(total)} strong />
           <Txt tone="faint" size={11} style={{ marginTop: 8, lineHeight: 16 }}>
             Confirmed on the next step — the shop prices every order itself.
           </Txt>

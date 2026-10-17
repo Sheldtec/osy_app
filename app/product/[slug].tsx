@@ -40,6 +40,7 @@ import { useCart } from "@/lib/cart";
 import { useWishlist } from "@/lib/wishlist";
 import { canBeStyle } from "@/lib/face-match-api";
 import { useStorefrontSettings } from "@/lib/settings";
+import { signedMoney } from "@/lib/currency";
 import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import type { PreparationOption, ProductDetail, Review } from "@/lib/types";
 import { easeOut, motion, useReducedMotion } from "@/lib/motion";
@@ -86,8 +87,9 @@ export default function ProductScreen() {
   // silently misaligns state between renders.
   const { has, toggle } = useWishlist();
   const { features } = useStorefrontSettings();
-  // The DISPLAYED price only. The Add-to-bag total below stays in Naira —
-  // that figure is what the bag and the gateway will charge.
+  // Everything the shopper READS on this screen, the Add-to-bag total
+  // included (owner decision). The one figure that stays in Naira is the
+  // "Charged in ₦X" bridge line below, which names what is actually charged.
   const money = useApproxMoney();
   const { code: currency } = useCurrency();
 
@@ -369,11 +371,12 @@ export default function ProductScreen() {
                   {money(priceForLength(product, length))}
                 </Txt>
               ) : null}
-              {/* The bridge between the two figures on this screen.
-                  With a display currency chosen, the headline reads "≈ $21.63"
-                  while Add to bag says "₦28,800" — both true, and baffling side
-                  by side unless the Naira amount is named. The website states it
-                  at every committing surface for the same reason. */}
+              {/* The bridge to what is actually charged.
+                  This used to sit between two figures — a converted headline
+                  and an Add-to-bag button still in Naira. The button converts
+                  now too (owner direction 2026-10-17), so on a non-Naira
+                  setting this line is the only Naira figure on the screen,
+                  which makes it more load-bearing rather than less. */}
               {currency !== "NGN" ? (
                 <Txt tone="body" size={10} style={{ marginTop: 6 }}>
                   Charged in {naira(netPriceForLength(product, length))}
@@ -384,7 +387,7 @@ export default function ProductScreen() {
                   headline — the piece has one price; preparation is a choice. */}
               {surcharge > 0 ? (
                 <Txt tone="body" size={11} style={{ marginTop: 4 }}>
-                  + {naira(surcharge)} preparation
+                  {signedMoney(money(surcharge), "+")} preparation
                 </Txt>
               ) : null}
             </View>
@@ -684,7 +687,7 @@ export default function ProductScreen() {
             router.push("/cart");
           }}
           accessibilityRole="button"
-          accessibilityLabel={`Add to bag, ${naira(total)}`}
+          accessibilityLabel={`Add to bag, ${money(total)}`}
           style={({ pressed }) => [styles.addWrap, pressed && { opacity: 0.9 }]}
         >
           <LinearGradient
@@ -694,7 +697,7 @@ export default function ProductScreen() {
             style={styles.add}
           >
             <IconBagWhite width={17} height={17} />
-            <Text style={styles.addText}>Add to bag  ·  {naira(total)}</Text>
+            <Text style={styles.addText}>Add to bag  ·  {money(total)}</Text>
           </LinearGradient>
         </Pressable>
       </View>
@@ -950,6 +953,7 @@ function PrepCard({
   onStyle: (value: string) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const money = useApproxMoney();
   const reduced = useReducedMotion();
   const reveal = useRef(new Animated.Value(active ? 1 : 0)).current;
 
@@ -988,7 +992,7 @@ function PrepCard({
         </View>
 
         <Txt tone={option.surcharge ? "strong" : "success"} weight="medium" size={11}>
-          {option.surcharge ? `+${naira(option.surcharge)}` : "Included"}
+          {option.surcharge ? signedMoney(money(option.surcharge), "+") : "Included"}
         </Txt>
       </View>
 
@@ -1005,7 +1009,7 @@ function PrepCard({
           {option.style_options.map((s) => (
             <Chip
               key={s.value}
-              label={s.price ? `${s.label}  +${naira(s.price)}` : s.label}
+              label={s.price ? `${s.label}  ${signedMoney(money(s.price), "+")}` : s.label}
               selected={styleValue === s.value}
               onPress={() => onStyle(s.value)}
             />

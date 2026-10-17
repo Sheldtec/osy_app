@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { NAV_CLEARANCE } from "@/components/glass-nav";
 import { getMyOrders, ORDER_BUCKETS, type Order } from "@/lib/account-api";
+import { useScrollReveal } from "@/lib/scroll-reveal";
 import { useWishlist } from "@/lib/wishlist";
 import {
   AccountIconBg,
@@ -43,7 +44,7 @@ import { getPreorders } from "@/lib/preorders-api";
 import { getSpecialOrders } from "@/lib/special-orders-api";
 import { getUnreadCount } from "@/lib/notifications-api";
 import { getWallet } from "@/lib/wallet";
-import { naira } from "@/lib/format";
+import { useApproxMoney } from "@/lib/currency-context";
 import type { Theme } from "@/theme/theme";
 import { useTheme, useThemedStyles } from "@/theme/theme-context";
 import { fonts, layout } from "@/theme/tokens";
@@ -208,8 +209,14 @@ const QUICK_TILES = [
 ] as const;
 
 export default function ProfileScreen() {
+  const reveal = useScrollReveal();
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
+  // Formats a Naira figure in the shopper's chosen display currency (its own
+  // output carries the "≈" marker). Declared up here with the other hooks:
+  // the screen returns early for the loading and signed-out branches below,
+  // so a hook placed next to the markup it feeds would be a conditional call.
+  const money = useApproxMoney();
   // The order counts behind the four tiles. A failure leaves them at zero,
   // which is what they always showed anyway — it must never block the screen.
   const [orders, setOrders] = useState<Order[]>([]);
@@ -293,6 +300,7 @@ export default function ProfileScreen() {
 
   return (
     <ScrollView
+      {...reveal.props}
       style={{ backgroundColor: theme.surfaces.cart }}
       contentContainerStyle={{
         paddingTop: insets.top + 12,
@@ -366,15 +374,17 @@ export default function ProfileScreen() {
             something real: what you can spend, and the two things you would
             want to do about it.
 
-            Deliberately in NAIRA even when a display currency is chosen — the
-            amount is spendable credit and the Add-money form it leads to takes
-            whole Naira, so converting one side would be a lie about the
-            other. */}
+            Shown in the chosen display currency (owner direction 2026-10-17).
+            Nothing beside it is a Naira figure — the two pills are labels only
+            — so there is no mixed pair to mislead anyone. The Add-money form is
+            a separate route (app/account/wallet-topup.tsx) and keeps its own
+            amounts in whole Naira, because those are what the gateway charges;
+            this strip is read-only. */}
         <View style={styles.wallet}>
           <View style={{ flex: 1 }}>
             <Text style={styles.walletLabel}>STORE CREDIT</Text>
             <Txt tone="strong" display size={22} style={{ marginTop: 3 }}>
-              {balance === null ? "—" : naira(balance)}
+              {balance === null ? "—" : money(balance)}
             </Txt>
           </View>
 
@@ -502,7 +512,16 @@ export default function ProfileScreen() {
 
         <View style={{ flex: 1, marginLeft: 14 }}>
           <Text style={styles.rewardsTitle}>OsyGentle Rewards</Text>
-          <Text style={styles.rewardsAmount}>{naira(0)} available</Text>
+          {/*
+           * No figure here on purpose.
+           *
+           * This line was a hard-coded zero wrapped in the formatter, so it told
+           * EVERY customer they had nothing — including one holding store credit,
+           * whose real balance is on the strip a few rows up. A rewards balance
+           * the app cannot source is not a zero; this file's own rule (see the
+           * header note on `balance`) is that anything still unbuilt says what it
+           * is rather than inventing a number.
+           */}
           <Text style={styles.rewardsCaption}>Earn credit on every order</Text>
         </View>
       </LinearGradient>

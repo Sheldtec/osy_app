@@ -29,7 +29,7 @@ import {
   type ConciergeTurn,
   type StoredTurn,
 } from "@/lib/concierge-api";
-import { naira } from "@/lib/format";
+import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import { useStorefrontSettings } from "@/lib/settings";
 import {
@@ -94,6 +94,10 @@ export default function ConciergeScreen() {
   const insets = useSafeAreaInsets();
   const { user, signedIn } = useAuth();
   const { settings } = useStorefrontSettings();
+  // The concierge WRITES prices into its sentences, so it needs to know which
+  // currency the shopper is reading in. Only the code is sent; the server
+  // resolves the rate. What the shop charges is Naira either way.
+  const { code: currency } = useCurrency();
 
   const [mode, setMode] = useState<Mode>("bot");
   const [draft, setDraft] = useState("");
@@ -212,7 +216,7 @@ export default function ConciergeScreen() {
     setBusy(true);
 
     try {
-      const res = await askConcierge(history);
+      const res = await askConcierge(history, currency);
       setTurns((prev) => [
         ...prev,
         {
@@ -595,6 +599,7 @@ function LiveBubble({ message }: { message: SupportMessage }) {
 /** Products the concierge named, priced by the server. */
 function Recommended({ products }: { products: ConciergeProduct[] }) {
   const styles = useThemedStyles(makeStyles);
+  const money = useApproxMoney();
   return (
     <View style={{ gap: 8, marginBottom: 10 }}>
       {products.map((p) => {
@@ -605,7 +610,7 @@ function Recommended({ products }: { products: ConciergeProduct[] }) {
             key={p.slug}
             onPress={() => router.push({ pathname: "/product/[slug]", params: { slug: p.slug } })}
             accessibilityRole="button"
-            accessibilityLabel={`${p.name}, ${naira(onSale ? p.sale_price : p.price)}`}
+            accessibilityLabel={`${p.name}, ${money(onSale ? p.sale_price : p.price)}`}
             style={({ pressed }) => [styles.rec, pressed && { opacity: 0.8 }]}
           >
             <Thumb src={resolveImage(p.image)} seed={p.slug} alt={p.name} width={48} height={56} />
@@ -619,7 +624,7 @@ function Recommended({ products }: { products: ConciergeProduct[] }) {
                 </Txt>
               ) : null}
               <Txt tone="strong" display size={14} style={{ marginTop: 4 }}>
-                {naira(onSale ? p.sale_price : p.price)}
+                {money(onSale ? p.sale_price : p.price)}
               </Txt>
             </View>
           </Pressable>

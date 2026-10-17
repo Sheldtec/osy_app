@@ -18,7 +18,8 @@ import { Notice } from "@/components/checkout-ui";
 import { OrderPieceSheet } from "@/components/order-piece-sheet";
 import { GradientButton, Txt } from "@/components/ui";
 import { cancelOrder, getOrder, type Order, type OrderItem, type OrderStatus } from "@/lib/account-api";
-import { naira } from "@/lib/format";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import type { Theme } from "@/theme/theme";
 import { useTheme } from "@/theme/theme-context";
@@ -50,6 +51,7 @@ const STEPS: { key: keyof Order["timeline"]; label: string }[] = [
 
 export default function OrderDetailScreen() {
   const theme = useTheme();
+  const money = useApproxMoney();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const numericId = Number(id);
@@ -222,7 +224,7 @@ export default function OrderDetailScreen() {
                   {i.preparation ? (
                     <Txt tone="body" size={9} style={{ marginTop: 3 }}>
                       {[i.preparation, i.preparation_style].filter(Boolean).join(" · ")}
-                      {i.surcharge > 0 ? ` · +${naira(i.surcharge)}` : ""}
+                      {i.surcharge > 0 ? ` · + ${money(i.surcharge)}` : ""}
                     </Txt>
                   ) : null}
 
@@ -247,7 +249,7 @@ export default function OrderDetailScreen() {
                       Qty {i.qty}
                     </Txt>
                     <Txt tone="strong" size={11} weight="medium">
-                      {naira(i.line_total)}
+                      {money(i.line_total)}
                     </Txt>
                     {/* Without this the row looks like a static summary and
                         nobody discovers it opens. */}
@@ -265,23 +267,23 @@ export default function OrderDetailScreen() {
         <Panel>
           <SectionLabel>TOTAL</SectionLabel>
           <View style={{ marginTop: 10 }}>
-            <Line label="Subtotal" value={naira(order.totals.subtotal)} />
+            <Line label="Subtotal" value={money(order.totals.subtotal)} />
             <Line
               label="Delivery"
-              value={order.totals.delivery === 0 ? "Free" : naira(order.totals.delivery)}
+              value={order.totals.delivery === 0 ? "Free" : money(order.totals.delivery)}
               tone={order.totals.delivery === 0 ? "success" : "body"}
             />
             {order.totals.discount > 0 ? (
               <Line
                 label={order.coupon_code ? `Discount (${order.coupon_code})` : "Discount"}
-                value={`− ${naira(order.totals.discount)}`}
+                value={signedMoney(money(order.totals.discount), "−")}
                 tone="success"
               />
             ) : null}
             <Divide />
-            <Line label="Total" value={naira(order.totals.total)} strong />
+            <Line label="Total" value={money(order.totals.total)} strong />
             {order.amount_received > 0 && order.amount_received < order.totals.total ? (
-              <Line label="Received so far" value={naira(order.amount_received)} />
+              <Line label="Received so far" value={money(order.amount_received)} />
             ) : null}
           </View>
         </Panel>

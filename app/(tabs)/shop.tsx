@@ -26,6 +26,7 @@ import { ProductCard } from "@/components/product-card";
 import { SearchBar } from "@/components/search-bar";
 import { Txt } from "@/components/ui";
 import { getFacets, getProducts } from "@/lib/api";
+import { useScrollReveal } from "@/lib/scroll-reveal";
 import { useCart } from "@/lib/cart";
 import type { Category, Product, ProductFacets } from "@/lib/types";
 import type { Theme } from "@/theme/theme";
@@ -68,6 +69,7 @@ const CATEGORIES: { key: Category | null; label: string }[] = [
 ];
 
 export default function ShopScreen() {
+  const reveal = useScrollReveal();
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
@@ -175,6 +177,7 @@ export default function ShopScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: theme.surfaces.cart, paddingTop: insets.top }}>
       <ScrollView
+        {...reveal.props}
         contentContainerStyle={{ paddingTop: 12, paddingBottom: insets.bottom + NAV_CLEARANCE }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"

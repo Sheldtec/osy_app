@@ -14,6 +14,8 @@ import {
 } from "@/components/account-ui";
 import { Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { signedMoney } from "@/lib/currency";
+import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import { naira } from "@/lib/format";
 import { ApiError } from "@/lib/http";
 import { getPreorders, payPreorder, type Preorder, type PreorderStatus } from "@/lib/preorders-api";
@@ -44,6 +46,8 @@ const STATUS: Record<PreorderStatus, { label: string; tone: "ok" | "warn" | "bad
 
 export default function PreordersScreen() {
   const s = useThemedStyles(makeS);
+  const money = useApproxMoney();
+  const { code: currency } = useCurrency();
   const { signedIn } = useAuth();
   const { features, loading: gating } = useStorefrontSettings();
 
@@ -78,7 +82,7 @@ export default function PreordersScreen() {
       setRows((prev) => (prev ?? []).map((p) => (p.id === row.id ? res.preorder : p)));
       setNotice(
         res.preorder.balance_due > 0
-          ? `Deposit paid. ${naira(res.preorder.balance_due)} left before it ships.`
+          ? `Deposit paid. ${money(res.preorder.balance_due)} left before it ships.`
           : "Paid in full — we’ll let you know the moment it lands.",
       );
     } catch (err) {
@@ -144,6 +148,13 @@ export default function PreordersScreen() {
 
       {rows?.map((row) => {
         const st = STATUS[row.status] ?? { label: row.status, tone: "mute" as const };
+        // The preparation add-on used to arrive baked into the label as a
+        // literal "(+₦35,000)" — the one frozen Naira figure on a screen where
+        // everything else converts. It is a number now, so it goes through the
+        // same formatter as the rest of the money here.
+        const surcharge = row.preparation_surcharge ?? 0;
+        const spec = row.variant.join(" · ");
+        const variantLine = surcharge > 0 ? `${spec} (${signedMoney(money(surcharge), "+")})`.trim() : spec;
         const owing = row.balance_due > 0;
         const open = row.status !== "cancelled" && row.status !== "fulfilled";
         const busy = busyId === row.id;
@@ -163,17 +174,17 @@ export default function PreordersScreen() {
                 <Txt tone="strong" size={11} numberOfLines={2} style={{ lineHeight: 16 }}>
                   {row.name}
                 </Txt>
-                {row.variant.length ? (
+                {variantLine ? (
                   <Txt tone="body" size={9} style={{ marginTop: 4, lineHeight: 13 }}>
-                    {row.variant.join(" · ")}
+                    {variantLine}
                   </Txt>
                 ) : null}
                 <Txt tone="strong" display size={17} style={{ marginTop: 8 }}>
-                  {naira(row.total_amount)}
+                  {money(row.total_amount)}
                 </Txt>
                 {row.qty > 1 ? (
                   <Txt tone="body" size={9} style={{ marginTop: 3 }}>
-                    {row.qty} × {naira(row.unit_price)}
+                    {row.qty} × {money(row.unit_price)}
                   </Txt>
                 ) : null}
               </View>
@@ -181,13 +192,26 @@ export default function PreordersScreen() {
 
             {/* ---- the money, stated plainly ---- */}
             <View style={s.money}>
-              <Row label="Paid so far" value={naira(row.amount_paid)} />
+              <Row label="Paid so far" value={money(row.amount_paid)} />
               {owing ? (
-                <Row label="Still to pay" value={naira(row.balance_due)} strong />
+                <Row label="Still to pay" value={money(row.balance_due)} strong />
               ) : (
                 <Row label="Outstanding" value="Nothing" strong />
               )}
               {row.release_at ? <Row label="Expected" value={stamp(row.release_at)} /> : null}
+              {/*
+               * The bridge to the real charge.
+               *
+               * The Pay buttons below convert like everything else, so without
+               * this line a shopper reading dollars would see no Naira figure
+               * anywhere before a wallet debit. Checkout states it the same way
+               * for the same reason.
+               */}
+              {currency !== "NGN" && owing ? (
+                <Txt tone="body" size={10} style={{ marginTop: 10 }}>
+                  Charged in {naira(row.balance_due)}
+                </Txt>
+              ) : null}
             </View>
 
             {open && owing ? (
@@ -197,7 +221,7 @@ export default function PreordersScreen() {
                     onPress={() => void pay(row, "deposit")}
                     disabled={busy}
                     accessibilityRole="button"
-                    accessibilityLabel={`Pay the ${naira(row.deposit_amount)} deposit`}
+                    accessibilityLabel={`Pay the ${money(row.deposit_amount)} deposit`}
                     style={({ pressed }) => [s.action, pressed && { opacity: 0.75 }]}
                   >
                     <Text style={s.actionText}>
@@ -210,11 +234,11 @@ export default function PreordersScreen() {
                   onPress={() => void pay(row, "full")}
                   disabled={busy}
                   accessibilityRole="button"
-                  accessibilityLabel={`Pay the remaining ${naira(row.balance_due)}`}
+                  accessibilityLabel={`Pay the remaining ${money(row.balance_due)}`}
                   style={({ pressed }) => [s.action, s.actionStrong, pressed && { opacity: 0.75 }]}
                 >
                   <Text style={[s.actionText, { color: "#FFFFFF" }]}>
-                    {busy ? "Paying…" : `Pay ${naira(row.balance_due)}`}
+                    {busy ? "Paying…" : `Pay ${money(row.balance_due)}`}
                   </Text>
                 </Pressable>
               </View>

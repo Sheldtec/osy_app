@@ -145,6 +145,10 @@ export { default as ChevronRight } from "@/assets/figma/chevron-right.svg";
 export { default as IconPayment } from "@/assets/figma/icon-payment.svg";
 export { default as IconPreferences } from "@/assets/figma/icon-preferences.svg";
 export { default as IconHelp } from "@/assets/figma/icon-help.svg";
+/** Speech bubble with three dots — the concierge launcher. Deliberately NOT
+ *  `NavCommunity`, which is the Community tab's own bubble; two different
+ *  destinations must not share a glyph. */
+export { default as IconConcierge } from "@/assets/figma/icon-concierge.svg";
 export { default as IconSignOut } from "@/assets/figma/icon-sign-out.svg";
 
 // Auth — "Refined · 13 · Login" (249:950)

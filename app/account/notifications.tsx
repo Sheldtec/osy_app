@@ -12,12 +12,14 @@ import {
 } from "@/components/account-ui";
 import { Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
 import {
   deleteNotification,
   getNotificationPreferences,
   getNotifications,
   markRead,
+  notificationText,
   routeForLink,
   setMarketingEmails,
   type AppNotification,
@@ -66,6 +68,8 @@ export default function NotificationsScreen() {
   const theme = useTheme();
   const s = useThemedStyles(makeS);
   const { signedIn } = useAuth();
+  // Above every early return — a hook, and the feed quotes money in its prose.
+  const money = useApproxMoney();
 
   const [items, setItems] = useState<AppNotification[]>([]);
   const [unread, setUnread] = useState(0);
@@ -227,6 +231,9 @@ export default function NotificationsScreen() {
       {grouped.map((n) => {
         const tints = groupTint(theme);
         const tint = tints[n.group] ?? tints.Account;
+        // Naira as stored, unless the server sent a template for the figure —
+        // then the same sentence in the shopper's chosen currency.
+        const { title, body } = notificationText(n, money);
 
         return (
           <Panel key={n.id} padded={false}>
@@ -234,7 +241,7 @@ export default function NotificationsScreen() {
               onPress={() => void open(n)}
               onLongPress={() => setConfirming(n.id)}
               accessibilityRole="button"
-              accessibilityLabel={`${n.title}${n.read ? "" : ", unread"}. ${n.body ?? ""}`}
+              accessibilityLabel={`${title}${n.read ? "" : ", unread"}. ${body ?? ""}`}
               style={({ pressed }) => [s.row, pressed && { opacity: 0.75 }]}
             >
               <View style={[s.dot, { backgroundColor: tint }]}>
@@ -253,12 +260,12 @@ export default function NotificationsScreen() {
                   weight={n.read ? undefined : "medium"}
                   style={{ marginTop: 5, lineHeight: 17 }}
                 >
-                  {n.title}
+                  {title}
                 </Txt>
 
-                {n.body ? (
+                {body ? (
                   <Txt tone="body" size={10} style={{ marginTop: 4, lineHeight: 15 }}>
-                    {n.body}
+                    {body}
                   </Txt>
                 ) : null}
               </View>
@@ -280,7 +287,7 @@ export default function NotificationsScreen() {
                 <Pressable
                   onPress={() => void remove(n.id)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Delete "${n.title}"`}
+                  accessibilityLabel={`Delete "${title}"`}
                   style={({ pressed }) => [s.confirmBtn, pressed && { opacity: 0.7 }]}
                 >
                   <Text style={s.confirmGo}>Delete</Text>

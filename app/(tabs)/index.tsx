@@ -43,6 +43,7 @@ import { Txt } from "@/components/ui";
 import { ApiUnavailableError, getProducts } from "@/lib/api";
 import { buildHome, SHELF_PAGE, type HomePlan, type Shelf } from "@/lib/home-shelves";
 import { easeOut, motion, useReducedMotion } from "@/lib/motion";
+import { useScrollReveal } from "@/lib/scroll-reveal";
 import type { Product } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
 import { useStorefrontSettings } from "@/lib/settings";
@@ -153,6 +154,7 @@ export default function HomeScreen() {
   const [bootError, setBootError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [stuck, setStuck] = useState(false);
+  const reveal = useScrollReveal();
 
   const contentWidth = width - GUTTER * 2;
   // Narrower than a grid cell so the next card peeks — the only honest signal
@@ -222,6 +224,11 @@ export default function HomeScreen() {
       // re-render the whole list sixty times a second.
       setStuck((was) => (was === next ? was : next));
 
+      // The concierge bubble steps aside while you move down the page. Reported
+      // from inside the handler this screen already has, rather than attaching a
+      // second onScroll — a list takes only one.
+      reveal.report(contentOffset.y);
+
       // Two independent triggers, one guard.
       //
       // onEndReached alone wedges: VirtualizedList fires it at most ONCE per
@@ -234,7 +241,7 @@ export default function HomeScreen() {
         contentSize.height - layoutMeasurement.height - contentOffset.y;
       if (distanceFromEnd < layoutMeasurement.height) revealMore(contentSize.height);
     },
-    [revealMore],
+    [revealMore, reveal],
   );
 
   /**

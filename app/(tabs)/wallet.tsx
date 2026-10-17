@@ -26,7 +26,9 @@ import {
   WalletRing,
 } from "@/components/icons";
 import { GradientButton, Txt } from "@/components/ui";
-import { naira } from "@/lib/format";
+import { signedMoney } from "@/lib/currency";
+import { useScrollReveal } from "@/lib/scroll-reveal";
+import { useApproxMoney } from "@/lib/currency-context";
 import { useAuth } from "@/lib/auth";
 import { claimWelcomeCredit, getWallet } from "@/lib/wallet";
 import type { Wallet, WalletTransaction } from "@/lib/types";
@@ -59,10 +61,12 @@ import { fonts, layout } from "@/theme/tokens";
 const GUTTER = layout.gutter;
 
 export default function WalletScreen() {
+  const reveal = useScrollReveal();
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
   const { user, loading: authLoading } = useAuth();
+  const money = useApproxMoney();
 
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,7 +107,7 @@ export default function WalletScreen() {
     setNotice(null);
     try {
       const { amount } = await claimWelcomeCredit();
-      setNotice(`${naira(amount)} added to your wallet.`);
+      setNotice(`${money(amount)} added to your wallet.`);
       await load();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "The credit could not be claimed.");
@@ -114,6 +118,7 @@ export default function WalletScreen() {
 
   return (
     <ScrollView
+      {...reveal.props}
       style={{ backgroundColor: theme.surfaces.cart }}
       contentContainerStyle={{
         paddingTop: insets.top + 12,
@@ -162,12 +167,12 @@ export default function WalletScreen() {
         <WalletRing width={128} height={128} style={styles.balanceRing} />
 
         <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
-        <Text style={styles.balanceValue}>{naira(wallet.balance)}</Text>
+        <Text style={styles.balanceValue}>{money(wallet.balance)}</Text>
 
         {wallet.withdrawable > 0 ? (
           <View style={styles.balancePill}>
             <Text style={styles.balancePillText}>
-              {naira(wallet.withdrawable)} available to cash out
+              {money(wallet.withdrawable)} available to cash out
             </Text>
           </View>
         ) : null}
@@ -204,7 +209,7 @@ export default function WalletScreen() {
             // The screen explains the ceiling properly, but saying it here
             // saves a tap when there is plainly nothing to take out.
             if (wallet.withdrawable < wallet.withdrawal_min) {
-              setNotice(`Cash-out starts at ${naira(wallet.withdrawal_min)} of earned income.`);
+              setNotice(`Cash-out starts at ${money(wallet.withdrawal_min)} of earned income.`);
 
               return;
             }
@@ -243,7 +248,7 @@ export default function WalletScreen() {
               Welcome credit
             </Txt>
             <Txt tone="primary" weight="medium" size={11}>
-              {naira(welcome.amount)}
+              {money(welcome.amount)}
             </Txt>
           </View>
           <Txt tone="body" size={10} style={{ marginTop: 6, lineHeight: 15 }}>
@@ -315,6 +320,7 @@ function iconFor(type: string) {
 function ActivityRow({ txn, bordered }: { txn: WalletTransaction; bordered: boolean }) {
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const money = useApproxMoney();
   const Icon = iconFor(txn.type);
   const credit = txn.amount >= 0;
 
@@ -334,8 +340,7 @@ function ActivityRow({ txn, bordered }: { txn: WalletTransaction; bordered: bool
       </View>
 
       <Text style={[styles.amount, { color: credit ? theme.colors.success : theme.textInk.strong }]}>
-        {credit ? "+" : "−"}
-        {naira(Math.abs(txn.amount))}
+        {signedMoney(money(Math.abs(txn.amount)), credit ? "+" : "−")}
       </Text>
     </View>
   );

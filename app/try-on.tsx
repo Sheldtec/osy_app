@@ -23,8 +23,8 @@ import {
 import { GradientButton, Txt } from "@/components/ui";
 import { getProduct, getProducts } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useApproxMoney } from "@/lib/currency-context";
 import { canBeStyle, preparePhoto, renderLook } from "@/lib/face-match-api";
-import { naira } from "@/lib/format";
 import { ApiError } from "@/lib/http";
 import { useStorefrontSettings } from "@/lib/settings";
 import type { Product } from "@/lib/types";
@@ -69,6 +69,7 @@ interface Shot {
 export default function TryOnScreen() {
   const theme = useTheme();
   const s = useThemedStyles(makeS);
+  const money = useApproxMoney();
   // Opened from a product page: that piece is what they want to see on
   // themselves, so it arrives already chosen.
   const { slug } = useLocalSearchParams<{ slug?: string }>();
@@ -314,7 +315,7 @@ export default function TryOnScreen() {
                   {picked.name}
                 </Txt>
                 <Txt tone="strong" display size={14} style={{ marginTop: 3 }}>
-                  {naira(picked.sale_price ?? picked.price)}
+                  {money(picked.sale_price ?? picked.price)}
                 </Txt>
               </View>
               <Text style={s.viewLink}>View</Text>
@@ -396,7 +397,7 @@ export default function TryOnScreen() {
                 }}
                 accessibilityRole="button"
                 accessibilityState={{ selected: active }}
-                accessibilityLabel={`${p.name}, ${naira(p.sale_price ?? p.price)}`}
+                accessibilityLabel={`${p.name}, ${money(p.sale_price ?? p.price)}`}
                 style={({ pressed }) => [s.style, pressed && { opacity: 0.85 }]}
               >
                 <View style={[s.styleImg, active && s.styleImgActive]}>
@@ -410,7 +411,7 @@ export default function TryOnScreen() {
                   {p.name}
                 </Txt>
                 <Txt tone="body" size={9} style={{ marginTop: 2 }}>
-                  {naira(p.sale_price ?? p.price)}
+                  {money(p.sale_price ?? p.price)}
                 </Txt>
               </Pressable>
             );
