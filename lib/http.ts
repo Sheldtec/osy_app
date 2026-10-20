@@ -22,18 +22,31 @@ export class ApiError extends Error {
   fields?: Record<string, string[]>;
   /** The API's own discriminator. Today only ever "coupon". */
   field?: string;
+  /**
+   * A STABLE machine-readable cause, for a status that covers several.
+   *
+   * It exists because of the rule on `fallbackMessage` below: the server's
+   * messages are COPY and must never be pattern-matched. A 403 from the support
+   * endpoints means either "this conversation is not yours" (permanent) or
+   * "your session expired, sign in again" (recoverable), and the client has to
+   * tell those apart without reading the sentence — conflating them once
+   * destroyed the customer's only copy of their conversation token.
+   */
+  reason?: string;
 
   constructor(
     message: string,
     status: number,
     fields?: Record<string, string[]>,
     field?: string,
+    reason?: string,
   ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fields = fields;
     this.field = field;
+    this.reason = reason;
   }
 
   fieldError(name: string): string | undefined {
@@ -55,6 +68,7 @@ interface ErrorBody {
   message?: string;
   errors?: Record<string, string[]>;
   field?: string;
+  reason?: string;
 }
 
 export interface RequestInit_ {
@@ -80,6 +94,19 @@ export interface RequestInit_ {
    * actually completed.
    */
   timeoutMs?: number;
+  /**
+   * Cancel this request because a newer one has superseded it.
+   *
+   * Type-ahead is the reason this exists: it fires on a debounce while
+   * somebody types, so the only useful thing to do with an in-flight request
+   * once the next keystroke lands is stop paying for it — on a phone that is
+   * real data and a real radio wake, not just a wasted promise.
+   *
+   * Cancelling is NOT an error the caller should show. It arrives as an
+   * ApiError with status 0, like being offline, so anything that passes a
+   * signal has to be willing to swallow the failure.
+   */
+  signal?: AbortSignal;
 }
 
 export async function request<T>(path: string, init: RequestInit_ = {}): Promise<T> {
@@ -95,6 +122,20 @@ export async function request<T>(path: string, init: RequestInit_ = {}): Promise
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? TIMEOUT_MS);
 
+  // fetch takes exactly ONE signal, so the timeout and the caller's own
+  // cancellation have to be funnelled into the same controller. Forwarding
+  // rather than replacing matters: a superseded request still must not be
+  // allowed to outlive the timeout.
+  let cancelled = false;
+  const onAbort = () => {
+    cancelled = true;
+    controller.abort();
+  };
+  if (init.signal) {
+    if (init.signal.aborted) onAbort();
+    else init.signal.addEventListener("abort", onAbort);
+  }
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
@@ -108,15 +149,20 @@ export async function request<T>(path: string, init: RequestInit_ = {}): Promise
     });
   } catch {
     // Status 0 is this app's marker for "the request never landed". It matters
-    // on a write: nothing was created, so retrying is safe.
+    // on a write: nothing was created, so retrying is safe. A caller-cancelled
+    // request says so rather than blaming the connection — the one message a
+    // screen must never show, because nothing went wrong.
     throw new ApiError(
-      controller.signal.aborted
-        ? "The store took too long to answer. Check your connection and try again."
-        : "Could not reach the store. Check your connection and try again.",
+      cancelled
+        ? "The request was cancelled."
+        : controller.signal.aborted
+          ? "The store took too long to answer. Check your connection and try again."
+          : "Could not reach the store. Check your connection and try again.",
       0,
     );
   } finally {
     clearTimeout(timer);
+    init.signal?.removeEventListener("abort", onAbort);
   }
 
   if (res.status === 204) return undefined as T;
@@ -124,7 +170,13 @@ export async function request<T>(path: string, init: RequestInit_ = {}): Promise
   const body = (await res.json().catch(() => ({}))) as ErrorBody & T;
 
   if (!res.ok) {
-    throw new ApiError(body.message || fallbackMessage(res.status), res.status, body.errors, body.field);
+    throw new ApiError(
+      body.message || fallbackMessage(res.status),
+      res.status,
+      body.errors,
+      body.field,
+      body.reason,
+    );
   }
 
   return body as T;

@@ -75,12 +75,23 @@ export async function sendCommunityMessage(
   const res = await fetch(`${API_BASE}/community/messages`, {
     method: "POST",
     headers: headers(true),
-    body: JSON.stringify({ body, ...(replyTo ? { reply_to: replyTo } : {}) }),
+    // `reply_to_id`, NOT `reply_to`. CommunityController::send validates
+    // `reply_to_id`, so the old key was dropped by the validator and every
+    // reply was silently posted as an ordinary message — the quote the screen
+    // renders could never be produced.
+    body: JSON.stringify({ body, ...(replyTo ? { reply_to_id: replyTo } : {}) }),
   });
   const data = await parse<{ message?: CommunityMessage } & CommunityMessage>(res);
 
   return data.message ?? data;
 }
+
+/**
+ * The server's ceiling on one message (`max:500` in CommunityController::send).
+ * Mirrored so the composer can stop at it rather than letting someone type 900
+ * characters and lose them to a 422.
+ */
+export const MESSAGE_MAX = 500;
 
 export async function likeCommunityMessage(id: number): Promise<{ likes: number; liked: boolean }> {
   const res = await fetch(`${API_BASE}/community/messages/${id}/like`, {
@@ -88,4 +99,19 @@ export async function likeCommunityMessage(id: number): Promise<{ likes: number;
     headers: headers(true),
   });
   return parse(res);
+}
+
+/**
+ * Delete one of YOUR OWN messages.
+ *
+ * The server checks ownership itself (`destroyOwn` 403s on anyone else's) and
+ * soft-deletes, so a quote of the removed message survives as "Removed
+ * message" rather than vanishing from the reply it was part of.
+ */
+export async function deleteCommunityMessage(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/community/messages/${id}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  await parse<{ deleted: boolean }>(res);
 }

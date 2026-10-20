@@ -68,11 +68,19 @@ export function getPaymentMethods(): Promise<PaymentMethods> {
  * ------------------------------------------------------------------ */
 
 export interface ShippingQuote {
+  /** What will actually be charged — already net of the birthday perk. */
   fee: number;
   express_fee: number;
   label: string;
   /** How specific the matched rate was. "fallback" means no zone covers them. */
   matched: "state" | "country" | "fallback";
+  /** The undiscounted zone rate, for striking through. */
+  zone_fee?: number;
+  zone_express_fee?: number;
+  /** True when this customer's birthday month is paying for the delivery. */
+  birthday_free?: boolean;
+  /** Which month that is, e.g. "October" — null unless the perk applies. */
+  birthday_month?: string | null;
 }
 
 export interface PickupOption {
@@ -93,7 +101,16 @@ export interface PickupOption {
  */
 export function getShippingQuote(country: string, state: string): Promise<ShippingQuote> {
   const q = new URLSearchParams({ country: country || "NG", state: state || "" });
-  return request<ShippingQuote>(`/shipping/quote?${q.toString()}`);
+
+  // `authOptional`, on a PUBLIC endpoint, deliberately.
+  //
+  // Free delivery in the customer's birthday month is resolved server-side from
+  // the signed-in account, so an anonymous quote comes back at the full zone
+  // rate. Without the token the app showed a shopper the fee on a basket the
+  // server then charged ₦0 for — the perk applied invisibly and the total on
+  // the Pay button was wrong. Optional rather than required because a visitor
+  // who is not signed in must still get a quote.
+  return request<ShippingQuote>(`/shipping/quote?${q.toString()}`, { authOptional: true });
 }
 
 /** The studio-collection option. Hide the choice entirely when not enabled. */
@@ -245,6 +262,19 @@ export interface PaymentStatus {
   charge_amount: string;
   /** Which kind of thing this reference belongs to. Assert on it. */
   kind: "order" | "wallet_topup" | "installment";
+  /**
+   * Present when the reference is a RE-PAYMENT of an order that already
+   * existed (see `payOrder`) — one of pending | settled | failed | abandoned |
+   * unapplied.
+   *
+   * `unapplied` is the one a screen must handle rather than fold into
+   * "unpaid": it is verified money that arrived against an order which had
+   * already been settled another way. The order is paid, this payment is a
+   * second charge, and it is recorded for a person to resolve — so the
+   * customer is told their money is accounted for instead of being left to
+   * assume it vanished.
+   */
+  attempt_status?: string;
 }
 
 /**

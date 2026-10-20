@@ -149,6 +149,18 @@ export { default as IconHelp } from "@/assets/figma/icon-help.svg";
  *  `NavCommunity`, which is the Community tab's own bubble; two different
  *  destinations must not share a glyph. */
 export { default as IconConcierge } from "@/assets/figma/icon-concierge.svg";
+/** Thrift resale. Strokes are currentColor so it follows the theme. */
+export { default as IconThrift } from "@/assets/figma/icon-thrift.svg";
+
+// Chat affordances for the community room, hand-authored to this set's
+// convention (currentColor, 1.5 stroke, round caps) — Figma exported the room
+// without a reply, copy, delete or pending glyph.
+export { default as IconReply } from "@/assets/figma/icon-reply.svg";
+export { default as IconClock } from "@/assets/figma/icon-clock.svg";
+export { default as IconCopy } from "@/assets/figma/icon-copy.svg";
+export { default as IconTrash } from "@/assets/figma/icon-trash.svg";
+/** Line-drawn bag for the empty-cart state. Scenery, not a control. */
+export { default as EmptyBag } from "@/assets/figma/illus-empty-bag.svg";
 export { default as IconSignOut } from "@/assets/figma/icon-sign-out.svg";
 
 // Auth — "Refined · 13 · Login" (249:950)
@@ -175,11 +187,39 @@ export { default as WalletRing } from "@/assets/figma/wallet-ring.svg";
 export { default as IconAddMoney } from "@/assets/figma/icon-add-money.svg";
 export { default as IconCashOut } from "@/assets/figma/icon-cash-out.svg";
 export { default as IconSend } from "@/assets/figma/icon-send.svg";
+// Hand-authored to this set's convention (currentColor, 1.5 stroke, round
+// caps) because the top-up screen needs a bank glyph beside its transfer
+// option and Figma never exported one.
+export { default as IconBank } from "@/assets/figma/icon-bank.svg";
 export { default as ActivityIconBg } from "@/assets/figma/activity-icon-bg.svg";
 export { default as IconActivityPlus } from "@/assets/figma/icon-activity-plus.svg";
 export { default as IconActivitySale } from "@/assets/figma/icon-activity-sale.svg";
 export { default as IconActivityGift } from "@/assets/figma/icon-activity-gift.svg";
 export { default as IconActivityBag } from "@/assets/figma/icon-activity-bag.svg";
+
+/*
+ * Notification glyphs.
+ *
+ * The feed needs one glyph per notification TYPE, and the catalogue has
+ * twenty-nine of them; most are served by icons already in this file. These are
+ * the gaps, hand-authored to the set's convention (20x20, currentColor, 1.5
+ * stroke, round caps) because no frame ever contained a notification list.
+ *
+ * `IconNotification` is NOT `IconBell`. That one is the wallet header's whole
+ * BUTTON — a 74x74 export with a drop-shadow filter, a white disc and a
+ * hardcoded #E84D5C unread dot baked into the artwork — so dropping it into a
+ * 34pt row well would paint a tiny shadowed button with a permanent red dot on
+ * every unrecognised notification. This is the bare bell on its own.
+ */
+export { default as IconNotification } from "@/assets/figma/icon-notification.svg";
+export { default as IconCancelled } from "@/assets/figma/icon-cancelled.svg";
+export { default as IconRefund } from "@/assets/figma/icon-refund.svg";
+export { default as IconAlert } from "@/assets/figma/icon-alert.svg";
+export { default as IconDocument } from "@/assets/figma/icon-document.svg";
+/** Two figures — a referral is a person you brought, not a transaction. */
+export { default as IconPeople } from "@/assets/figma/icon-people.svg";
+export { default as IconAnnounce } from "@/assets/figma/icon-announce.svg";
+export { default as IconSparkle } from "@/assets/figma/icon-sparkle.svg";
 
 // Onboarding — "Refined · 8 · Onboarding" (249:602)
 export { default as OnboardingEllipse } from "@/assets/figma/onboarding-ellipse.svg";

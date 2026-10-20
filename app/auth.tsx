@@ -1,7 +1,8 @@
+import * as Google from "expo-auth-session/providers/google";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -30,6 +31,7 @@ import {
 } from "@/components/icons";
 import { Txt } from "@/components/ui";
 import { AuthError, AuthTimeout, useAuth, type SignupStep } from "@/lib/auth";
+import { appleAvailable, facebookAvailable, googleAvailable, googleClientIds } from "@/lib/oauth";
 import { API_BASE } from "@/lib/api";
 import type { Theme } from "@/theme/theme";
 import { useTheme, useThemedStyles } from "@/theme/theme-context";
@@ -128,7 +130,12 @@ export default function AuthScreen() {
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
-  const { signIn, signUp, checkSignupStep } = useAuth();
+  const { signIn, signInWithGoogle, signUp, checkSignupStep } = useAuth();
+
+
+
+  /** Whether any provider can actually sign somebody in on this build. */
+  const anySocial = googleAvailable() || appleAvailable || facebookAvailable;
 
   // Other screens can open this straight on the wizard, and a friend's invite
   // link carries its code in: /auth?mode=signup&ref=LX1234.
@@ -566,7 +573,9 @@ export default function AuthScreen() {
         </View>
 
         {/* ---- social: only where it can replace the WHOLE wizard ---- */}
-        {!isSignup || step === 0 ? (
+        {/* Nothing at all when no provider is connected — an empty "or continue
+            with" divider is a promise the screen cannot keep. */}
+        {(!isSignup || step === 0) && anySocial ? (
           <>
             <View style={styles.dividerRow}>
               <View style={styles.dividerLine} />
@@ -577,15 +586,27 @@ export default function AuthScreen() {
             </View>
 
             <View style={styles.socialRow}>
-              <Social label="Google" onPress={setNotice}>
-                <SocialGoogle width={22} height={22} />
-              </Social>
-              <Social label="Facebook" onPress={setNotice}>
-                <SocialFacebook width={24} height={24} />
-              </Social>
-              <Social label="Apple" onPress={setNotice}>
-                <SocialApple width={22} height={22} color={theme.textInk.strong} />
-              </Social>
+              {/* Rendered only when configured, because the hook inside it
+                  THROWS otherwise — see GoogleButton. */}
+              {googleAvailable() ? (
+                <GoogleButton
+                  onStart={() => {
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  onError={setError}
+                />
+              ) : null}
+              {facebookAvailable ? (
+                <Social label="Facebook" onPress={() => setNotice("Facebook sign-in isn’t connected yet.")}>
+                  <SocialFacebook width={24} height={24} />
+                </Social>
+              ) : null}
+              {appleAvailable ? (
+                <Social label="Apple" onPress={() => setNotice("Apple sign-in isn’t connected yet.")}>
+                  <SocialApple width={22} height={22} color={theme.textInk.strong} />
+                </Social>
+              ) : null}
             </View>
           </>
         ) : null}
@@ -728,23 +749,108 @@ function Field({
   );
 }
 
+/**
+ * The Google button, and the only place that touches `expo-auth-session`.
+ *
+ * It is a component rather than a few lines in the screen because
+ * `Google.useIdTokenAuthRequest` THROWS when the current platform has no client
+ * id — "Client Id property `webClientId` must be defined to use Google auth on
+ * this platform". A hook cannot be called conditionally, so the only way to not
+ * call it is to not render the thing that calls it. The parent decides with
+ * `googleAvailable()`; this component assumes it has what it needs.
+ *
+ * It asks for an ID TOKEN rather than an authorisation code, because that is
+ * exactly what the server's verifier takes — the same credential the website
+ * already posts to the same endpoint. The nonce is generated for us.
+ *
+ * NEEDS A DEVELOPMENT BUILD: Google rejects the `exp://` address Expo Go
+ * redirects to, and Expo's hosted proxy that used to bridge that is gone.
+ */
+function GoogleButton({ onStart, onError }: { onStart: () => void; onError: (message: string) => void }) {
+  const { signInWithGoogle } = useAuth();
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(googleClientIds);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!response) return;
+
+    // Dismissing the sheet is a choice, not a failure: say nothing.
+    if (response.type !== "success") {
+      setBusy(false);
+      if (response.type === "error") onError("Google could not complete that sign-in.");
+
+      return;
+    }
+
+    const idToken = response.params?.id_token;
+    if (!idToken) {
+      setBusy(false);
+      onError("Google did not return a usable sign-in.");
+
+      return;
+    }
+
+    let alive = true;
+    void (async () => {
+      try {
+        await signInWithGoogle(idToken);
+        // The same destination a password sign-in uses, so the two agree.
+        if (alive) router.replace("/shop");
+      } catch (err) {
+        if (alive) {
+          onError(err instanceof AuthError ? err.message : "We could not finish signing you in.");
+        }
+      } finally {
+        if (alive) setBusy(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [response, signInWithGoogle, onError]);
+
+  return (
+    <Social
+      label="Google"
+      // `request` is null until the PKCE challenge has been prepared, which is
+      // a few milliseconds after mount.
+      disabled={!request || busy}
+      onPress={() => {
+        onStart();
+        setBusy(true);
+        void promptAsync().catch(() => {
+          onError("Google sign-in could not be opened.");
+          setBusy(false);
+        });
+      }}
+    >
+      <SocialGoogle width={22} height={22} />
+    </Social>
+  );
+}
+
 function Social({
   label,
   children,
   onPress,
+  disabled,
 }: {
   label: string;
   children: React.ReactNode;
-  onPress: (notice: string) => void;
+  onPress: () => void;
+  /** Only while the request is being prepared or a sign-in is in flight. */
+  disabled?: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
+
   return (
     <Pressable
-      onPress={() => onPress(`${label} sign-in is not connected yet.`)}
+      onPress={disabled ? undefined : onPress}
       accessibilityRole="button"
       accessibilityLabel={`Continue with ${label}`}
-      accessibilityState={{ disabled: true }}
-      style={({ pressed }) => [styles.social, pressed && { opacity: 0.7 }]}
+      accessibilityState={{ disabled: Boolean(disabled) }}
+      style={({ pressed }) => [styles.social, disabled && { opacity: 0.5 }, pressed && { opacity: 0.7 }]}
     >
       {children}
       <Text style={styles.socialLabel}>{label}</Text>

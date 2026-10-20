@@ -4,13 +4,7 @@ import { Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HairImage } from "@/components/hair-image";
-import {
-  DeliveryIconBg,
-  IconDelivery,
-  IconRemove,
-  IconTag,
-  photoFor,
-} from "@/components/icons";
+import { DeliveryIconBg, EmptyBag, IconDelivery, IconRemove, IconTag, photoFor } from "@/components/icons";
 import { Badge, Card, GradientButton, Stepper, Txt } from "@/components/ui";
 import { signedMoney } from "@/lib/currency";
 import { useApproxMoney } from "@/lib/currency-context";
@@ -84,20 +78,54 @@ export default function CartScreen() {
         </View>
 
         {!ready ? null : lines.length === 0 ? (
-          <Card style={styles.block}>
-            <Txt tone="strong" weight="medium" size={15}>
+          /*
+           * The empty bag.
+           *
+           * It used to be two lines of left-aligned text in a card at the top
+           * of an otherwise blank screen, which read like a form validation
+           * message rather than a shop. An empty state is still a page: it gets
+           * the screen's full attention, centred, with one clear way forward.
+           *
+           * The illustration is line-drawn in the hairline colour rather than
+           * filled — it is scenery, not a control, and a heavy graphic here
+           * would compete with the button that actually matters. It carries no
+           * accent mark either: a sparkle reads as "AI" in this app, where the
+           * four-point star belongs to the try-on studio, so one sitting on a
+           * shopping bag promised something this screen does not do.
+           */
+          <View style={styles.empty}>
+            <EmptyBag width={104} height={104} color={theme.surfaces.lineProduct} />
+
+            {/* `tone` is explicit: Txt defaults to the BODY grey, so a display
+                heading without it renders muted and reads as disabled. */}
+            <Txt tone="strong" display size={21} center style={{ marginTop: 26 }}>
               Your bag is empty
             </Txt>
-            <Txt tone="body" size={12} style={{ marginTop: 6 }}>
-              Everything you add will wait for you here.
+            <Txt tone="body" size={12.5} center style={{ marginTop: 8, lineHeight: 19 }}>
+              Pieces you add will wait here — with the length, colour and
+              preparation you chose, ready when you are.
             </Txt>
+
             <GradientButton
               label="Start shopping"
-              height={46}
-              style={{ marginTop: 16 }}
+              height={50}
+              style={{ marginTop: 28, alignSelf: "stretch" }}
               onPress={() => router.push("/shop")}
             />
-          </Card>
+
+            {/* The quieter second door. Somebody with an empty bag has often
+                already saved something; sending them only to the full
+                catalogue ignores the shortlist they built. */}
+            <Pressable
+              onPress={() => router.push("/account/wishlist")}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.emptyLink, pressed && { opacity: 0.7 }]}
+            >
+              <Txt tone="primary" weight="medium" size={12.5}>
+                View your saved pieces
+              </Txt>
+            </Pressable>
+          </View>
         ) : (
           <View style={{ gap: 12, paddingHorizontal: GUTTER }}>
             {lines.map((line) => {
@@ -303,6 +331,15 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   itemFooter: { flexDirection: "row", alignItems: "center", marginTop: "auto" },
 
   block: { marginHorizontal: GUTTER, marginTop: 16 },
+  empty: {
+    alignItems: "center",
+    paddingHorizontal: GUTTER + 12,
+    // Not vertically centred in the viewport: an empty state that floats in
+    // the middle of a tall screen reads as an error. Sitting a little above
+    // centre keeps it in the thumb's reach and under the title.
+    paddingTop: 48,
+  },
+  emptyLink: { marginTop: 18, paddingVertical: 8 },
   delivery: {
     flexDirection: "row",
     alignItems: "center",

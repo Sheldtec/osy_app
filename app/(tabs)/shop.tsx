@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
-import { useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -22,10 +22,24 @@ import {
 } from "@/components/filter-sheet";
 import { NAV_CLEARANCE } from "@/components/glass-nav";
 import { ChevronDown } from "@/components/icons";
+import { ParsedSearchChips } from "@/components/parsed-search-chips";
 import { ProductCard } from "@/components/product-card";
 import { SearchBar } from "@/components/search-bar";
+import { SearchSheet } from "@/components/search-sheet";
 import { Txt } from "@/components/ui";
-import { getFacets, getProducts } from "@/lib/api";
+import { getFacets, getProducts, type ProductQuery } from "@/lib/api";
+import {
+  interpretSearch,
+  keywordsOnly,
+  parsedQueryParams,
+  splitCategory,
+  toParsedQuery,
+  withoutParsedPrice,
+  withoutParsedValue,
+  type ParsedQuery,
+  type SearchFilterKey,
+} from "@/lib/product-search";
+import { logSearch } from "@/lib/search-history";
 import { useScrollReveal } from "@/lib/scroll-reveal";
 import { useCart } from "@/lib/cart";
 import type { Category, Product, ProductFacets } from "@/lib/types";
@@ -41,9 +55,12 @@ import { fonts, layout, radius } from "@/theme/tokens";
  *
  * Things worth knowing:
  *
- *   · The search is a REAL query, debounced and sent as `?q=`, not a
- *     client-side filter over one page — that would search only what happened
- *     to be loaded and quietly miss the rest of a 124-product catalogue.
+ *   · The search is a REAL query, sent to the API, not a client-side filter
+ *     over one page — that would search only what happened to be loaded and
+ *     quietly miss the rest of a 124-product catalogue. A whole SENTENCE is
+ *     read into facets by the server first (see `commitSearch`), because
+ *     "long curly wig under 200k" appears in no product name and as plain
+ *     `?q=` would match nothing.
  *   · The count is `meta.total` from the API, not `items.length`. Those differ
  *     the moment the catalogue outgrows one page, and showing the page length
  *     as the total is simply wrong.
@@ -58,6 +75,31 @@ const PER_PAGE = 24;
 /** A route param, narrowed to a real catalogue category (or All). */
 function asCategory(key?: string): Category | null {
   return CATEGORIES.some((c) => c.key === key) ? (key as Category) : null;
+}
+
+/**
+ * The tighter of two bounds on the same price axis, as a query fragment.
+ *
+ * A floor narrows by rising and a ceiling by falling, which is why this takes
+ * the key: `Math.max` for `min`, `Math.min` for `max`. Getting it backwards
+ * fails OPEN — it widens the shopper's own filter.
+ */
+function narrower(key: "min" | "max", a: number | null, b: number | null): Partial<ProductQuery> {
+  const values = [a, b].filter((v): v is number => v !== null);
+  if (!values.length) return {};
+
+  return { [key]: key === "min" ? Math.max(...values) : Math.min(...values) };
+}
+
+/** Two lists offered under one facet param, de-duplicated. */
+function union(
+  key: "length" | "grade" | "texture",
+  mine: string[],
+  parsed?: string[],
+): Partial<ProductQuery> {
+  const all = Array.from(new Set([...mine, ...(parsed ?? [])]));
+
+  return all.length ? { [key]: all } : {};
 }
 
 const CATEGORIES: { key: Category | null; label: string }[] = [
@@ -103,10 +145,24 @@ export default function ShopScreen() {
     consumed.current = token;
     setCategory(asCategory(routeCategory));
   }, [at, routeCategory]);
+
+  /**
+   * The search, in two halves.
+   *
+   * `query` is the shopper's own words — what the bar shows and what gets
+   * logged. `parsed` is what the SERVER made of them: the facets, budget and
+   * leftover keywords it actually filtered on. Only `parsed` ever reaches the
+   * API, because sending the whole sentence as `?q=` matches no product name.
+   *
+   * `parsed` is also what makes the search undoable. Every value in it is a
+   * removable chip, so a sentence read slightly wrong can be corrected one
+   * facet at a time instead of retyped.
+   */
   const [query, setQuery] = useState("");
-  const [debounced, setDebounced] = useState("");
+  const [parsed, setParsed] = useState<ParsedQuery | null>(null);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const [facets, setFacets] = useState<ProductFacets | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
@@ -123,11 +179,72 @@ export default function ShopScreen() {
     };
   }, []);
 
-  // Debounce the query so a request is not fired per keystroke.
-  useEffect(() => {
-    const handle = setTimeout(() => setDebounced(query.trim()), 280);
-    return () => clearTimeout(handle);
-  }, [query]);
+  /**
+   * Commit a search: read the sentence, then apply it.
+   *
+   * ONE entry point, deliberately. The sheet's keyboard key, a recent search,
+   * "see all results" and (when it arrives) voice all land here, so there is
+   * exactly one place where a query becomes filters, and exactly one request
+   * per committed search rather than one per keystroke.
+   *
+   * The interpret call is awaited BEFORE `parsed` is set, which is what keeps
+   * it to one request: the results effect watches `parsed`, not `query`, so it
+   * never fires once with the raw sentence and again with the parse.
+   */
+  const commitSeq = useRef(0);
+  const commitSearch = useCallback(async (term: string) => {
+    const text = term.trim();
+    const mine = ++commitSeq.current;
+
+    setQuery(text);
+    if (!text) {
+      setParsed(null);
+
+      return;
+    }
+    setLoading(true);
+
+    const res = await interpretSearch(text);
+    // A newer search — or a cleared one — won while this was in flight.
+    if (commitSeq.current !== mine) return;
+
+    // No parse (parser unreachable) degrades to a plain keyword search rather
+    // than to nothing. Retiring the previous parse is the point: leaving the
+    // last sentence's facets applied and ANDing these words in as free text
+    // is a guaranteed empty grid under a confident summary of a search that
+    // was never run.
+    const next = res ? toParsedQuery(res) : keywordsOnly(text);
+
+    // A named category moves the rail, because the rail is visible: "All"
+    // sitting over a grid of bundles only is a worse lie than a moved pill.
+    const split = splitCategory(next);
+    if (split.category) setCategory(split.category);
+    setParsed(split.parsed);
+
+    if (res) {
+      // Only COMMITTED searches are logged, and only with the server's own
+      // count — above all so that "nothing matched" is recorded truthfully,
+      // since that is the one column the shop acts on. Nothing is logged when
+      // the parser was unreachable: a made-up zero would read as a gap in the
+      // catalogue rather than a gap in the network.
+      logSearch(text, res.total, res.applied.filters as Record<string, string[]>);
+    }
+  }, []);
+
+  /**
+   * Drop the search. The in-flight parse is retired with it, or it would land
+   * a moment later and reinstate the filters that were just dismissed.
+   *
+   * A category the sentence moved the rail to is deliberately LEFT. Ownership
+   * of it passed to the rail the moment the pill moved, and the shopper can
+   * see it and undo it in one tap — silently resetting a visible control they
+   * did not touch is the surprise, not keeping it.
+   */
+  const clearSearch = useCallback(() => {
+    commitSeq.current++;
+    setQuery("");
+    setParsed(null);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -135,17 +252,25 @@ export default function ShopScreen() {
     setError(null);
 
     const band = PRICE_BANDS.find((b) => b.key === filters.price);
+    const fromSearch = parsedQueryParams(parsed);
 
     getProducts({
       ...(category ? { category } : {}),
-      ...(debounced ? { q: debounced } : {}),
+      ...fromSearch,
       sort: filters.sort,
-      ...(band?.min ? { min: band.min } : {}),
-      ...(band?.max ? { max: band.max } : {}),
-      ...(filters.lengths.length ? { length: filters.lengths } : {}),
-      ...(filters.grades.length ? { grade: filters.grades } : {}),
+      // The sheet's band and the sentence's budget are two separate
+      // instructions about the same axis, so they INTERSECT: picking "under
+      // ₦100,000" and then typing "under 200k" honours both rather than
+      // letting the looser one quietly widen the tighter.
+      ...(narrower("min", band?.min ?? null, fromSearch.min ?? null)),
+      ...(narrower("max", band?.max ?? null, fromSearch.max ?? null)),
+      // Within one facet the API ORs, so a value the shopper ticked and a
+      // value the sentence inferred are offered together — the same widening
+      // the website gets from a parse ticking its sidebar boxes.
+      ...union("length", filters.lengths, fromSearch.length),
+      ...union("grade", filters.grades, fromSearch.grade),
+      ...union("texture", filters.textures, fromSearch.texture),
       ...(filters.laces.length ? { lace: filters.laces } : {}),
-      ...(filters.textures.length ? { texture: filters.textures } : {}),
       per_page: PER_PAGE,
     })
       .then((page) => {
@@ -164,13 +289,16 @@ export default function ShopScreen() {
     return () => {
       alive = false;
     };
-  }, [category, debounced, filters]);
+  }, [category, parsed, filters]);
 
   const cardWidth = (width - GUTTER * 2 - layout.gap) / 2;
   const sortLabel = useMemo(
     () => SORTS.find((s) => s.key === filters.sort)?.label ?? "Popular",
     [filters.sort],
   );
+  // The badge counts what the SHEET holds, not what a sentence inferred:
+  // facets from a search already announce themselves as chips under the bar,
+  // and counting them twice would read as filters the sheet cannot reset.
   const filterCount = activeFilterCount(filters);
   const searching = query.trim().length > 0;
 
@@ -200,9 +328,15 @@ export default function ShopScreen() {
             and the controls were costing a quarter of the screen while adding
             nothing once you had scrolled past them. */}
         <View style={styles.sticky}>
+          {/* A button, not a field. The sheet it opens is where recent
+              searches, the live parse preview and type-ahead products live —
+              none of which fits under a pill that is already pinned over a
+              scrolling grid. The committed query reads back in the pill, so
+              the bar still says what the grid is showing. */}
           <SearchBar
             value={query}
-            onChangeText={setQuery}
+            onPress={() => setSearchOpen(true)}
+            onClear={clearSearch}
             onFilter={() => setSheetOpen(true)}
             filterCount={filterCount}
             filterLabel="Filter and sort"
@@ -249,6 +383,20 @@ export default function ShopScreen() {
           </View>
         </View>
 
+        {/* Deliberately NOT inside the sticky block: it is an explanation of
+            the search, and a sticky block tall enough to hold it would cost a
+            third of the screen on every scroll. */}
+        {parsed ? (
+          <ParsedSearchChips
+            parsed={parsed}
+            onRemove={(key: SearchFilterKey, value: string) =>
+              setParsed((p) => (p ? withoutParsedValue(p, key, value) : p))
+            }
+            onRemovePrice={() => setParsed((p) => (p ? withoutParsedPrice(p) : p))}
+            onClear={clearSearch}
+          />
+        ) : null}
+
         <View style={styles.resultRow}>
           <Txt tone="strong" weight="medium" size={11} style={{ flex: 1 }}>
             {loading
@@ -294,7 +442,7 @@ export default function ShopScreen() {
             searching={searching}
             filtered={filterCount > 0 || category !== null}
             onClear={() => {
-              setQuery("");
+              clearSearch();
               setCategory(null);
               setFilters(DEFAULT_FILTERS);
             }}
@@ -328,6 +476,14 @@ export default function ShopScreen() {
         }}
         onClose={() => setSheetOpen(false)}
         bottomInset={insets.bottom}
+      />
+
+      <SearchSheet
+        open={searchOpen}
+        query={query}
+        onClose={() => setSearchOpen(false)}
+        onSubmit={(term) => void commitSearch(term)}
+        onOpenProduct={(slug) => router.push(`/product/${slug}`)}
       />
     </View>
   );

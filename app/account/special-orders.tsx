@@ -15,14 +15,17 @@ import {
   SectionLabel,
 } from "@/components/account-ui";
 import { Field } from "@/components/checkout-ui";
+import { QuotePaySheet } from "@/components/quote-pay-sheet";
 import { GradientButton, Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { useApproxMoney } from "@/lib/currency-context";
+import { naira } from "@/lib/format";
 import { ApiError } from "@/lib/http";
 import {
+  cancelSpecialOrder,
   createSpecialOrder,
   getSpecialOrders,
-  respondToSpecialOrder,
+  verifyQuotePayment,
   MAX_IMAGES,
   MIN_DESCRIPTION,
   type SpecialOrder,
@@ -36,9 +39,16 @@ import { fonts } from "@/theme/tokens";
  * Special orders — "find me this piece".
  *
  * Describe hair we don't stock, attach reference photos, and the shop comes
- * back with a quote. ACCEPTING THE QUOTE PAYS IT, from the wallet — there is
- * no gateway path — so the accept button says the amount and the screen points
- * at the top-up when the balance will not cover it.
+ * back with a quote. ACCEPTING THE QUOTE PAYS IT — from the wallet, or by card
+ * through either hosted gateway (see `QuotePaySheet`, which owns that choice).
+ * Until recently the wallet was the only route, so a customer quoted more than
+ * their store credit could not accept their own quote at all.
+ *
+ * This screen never decides that something has been paid. It prints what the
+ * server told it: `payment.payable` says whether paying is possible at all, and
+ * `payment.awaiting` marks a card payment already in flight — for which the
+ * only honest action is to go and ask the server again, not to charge a second
+ * time.
  *
  * Photos are the strict CUSTOMER upload tier: JPEG and PNG only, magic-byte
  * checked server-side, so a renamed .webp is refused however the picker
@@ -70,6 +80,8 @@ export default function SpecialOrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  /** The quote whose payment sheet is open. */
+  const [paying, setPaying] = useState<SpecialOrder | null>(null);
 
   const [composing, setComposing] = useState(false);
   const [title, setTitle] = useState("");
@@ -185,22 +197,65 @@ export default function SpecialOrdersScreen() {
     }
   }
 
-  async function respond(row: SpecialOrder, action: "accept" | "cancel") {
+  async function cancel(row: SpecialOrder) {
     setNotice(null);
     setBusyId(row.id);
     try {
-      const res = await respondToSpecialOrder(row.id, action);
+      const res = await cancelSpecialOrder(row.id);
       setRows((prev) => (prev ?? []).map((r) => (r.id === row.id ? res.special_order : r)));
-      setNotice(
-        action === "accept"
-          ? `Paid. Your wallet balance is now ${money(res.wallet_balance)}.`
-          : "That request has been cancelled.",
-      );
+      setNotice("That request has been cancelled.");
     } catch (err) {
       setNotice(err instanceof ApiError ? err.message : "That didn’t go through.");
     } finally {
       setBusyId(null);
     }
+  }
+
+  /**
+   * Ask the server about a card payment that is already in flight.
+   *
+   * This exists for the customer who paid and then lost the app — a redirect
+   * that never came back, a phone call, a dead battery. The alternative on
+   * offer would be paying a second time, which is why this is a button and the
+   * second charge is not.
+   */
+  async function checkPayment(row: SpecialOrder) {
+    const ref = row.payment.check_ref;
+    if (!ref) return;
+
+    setNotice(null);
+    setBusyId(row.id);
+    try {
+      const status = await verifyQuotePayment(ref);
+      setNotice(
+        status.paid
+          ? `Paid ${naira(status.total)}. ${row.ref} is confirmed.`
+          : status.attempt_status === "unapplied"
+            ? "That payment went through, but this request had already closed. We’ve recorded it and the team will be in touch to put it right."
+            : "We haven’t seen that payment yet. If you completed it, give it a moment and check again.",
+      );
+      // Whatever the answer, the row itself is the authority on what is paid.
+      await load(true);
+    } catch (err) {
+      setNotice(
+        err instanceof ApiError
+          ? err.message
+          : "We couldn’t check that payment just now. Please try again in a moment.",
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** What the payment sheet reports back, printed verbatim — never reinterpreted. */
+  function paymentDone(message: string, updated?: SpecialOrder) {
+    setPaying(null);
+    setNotice(message);
+    if (updated) {
+      setRows((prev) => (prev ?? []).map((r) => (r.id === updated.id ? updated : r)));
+    }
+    // A card payment settles server-side, so the row is re-read either way.
+    void load(true);
   }
 
   if (!signedIn) {
@@ -373,7 +428,18 @@ export default function SpecialOrdersScreen() {
 
           {rows?.map((row) => {
             const st = STATUS[row.status] ?? { label: row.status, tone: "mute" as const };
-            const quoted = row.status === "quoted" && (row.quote_amount ?? 0) > 0;
+            // The SERVER's answer to "can this be paid", not this screen's
+            // reading of the lifecycle — the two drifting apart is how a
+            // customer ends up tapping a button that only ever 422s.
+            const quoted = row.payment.payable;
+            const awaiting = row.payment.awaiting;
+            /**
+             * A card payment we can still ask about. Offered alongside paying
+             * once it has stopped blocking: the customer who paid and lost the
+             * redirect needs a way to find out, and that way must never be
+             * "pay again and see".
+             */
+            const checkable = Boolean(row.payment.check_ref) && row.amount_paid === 0;
             const cancellable = ["pending", "reviewing", "quoted", "accepted"].includes(row.status);
             const busy = busyId === row.id;
 
@@ -424,39 +490,74 @@ export default function SpecialOrdersScreen() {
                   </Txt>
                 ) : null}
 
-                {quoted || cancellable ? (
-                  <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
-                    {quoted ? (
+                {/* A card payment already in flight. Shown INSTEAD of the pay
+                    button, and before the cancel row, so it is read before a
+                    second charge is started for the same money. */}
+                {awaiting ? (
+                  <View style={s.awaiting}>
+                    <Text style={s.awaitingLabel}>PAYMENT IN PROGRESS</Text>
+                    <Txt tone="body" size={10.5} style={{ marginTop: 7, lineHeight: 16 }}>
+                      We’ve sent you to the provider for {naira(row.quote_amount ?? 0)} and are
+                      waiting to hear back. If you already paid, there is no need to pay again.
+                    </Txt>
+                  </View>
+                ) : null}
+
+                {quoted || cancellable || checkable ? (
+                  <View style={s.actions}>
+                    {checkable ? (
                       <Pressable
-                        onPress={() => void respond(row, "accept")}
+                        onPress={() => void checkPayment(row)}
                         disabled={busy}
                         accessibilityRole="button"
-                        accessibilityLabel={`Accept and pay ${money(row.quote_amount ?? 0)}`}
+                        accessibilityLabel={`Check the payment on request ${row.ref}`}
+                        style={({ pressed }) => [
+                          s.action,
+                          // The strong treatment only while it is the ONLY
+                          // thing to do; once paying is offered again, that is
+                          // the primary action and this is the quieter escape.
+                          awaiting && s.actionStrong,
+                          pressed && { opacity: 0.75 },
+                        ]}
+                      >
+                        <Text style={[s.actionText, awaiting && { color: "#FFFFFF" }]}>
+                          {busy ? "Checking…" : "Check payment"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+
+                    {quoted && !awaiting ? (
+                      <Pressable
+                        onPress={() => {
+                          setNotice(null);
+                          setPaying(row);
+                        }}
+                        disabled={busy}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Accept and pay the quote of ${naira(row.quote_amount ?? 0)}`}
                         style={({ pressed }) => [s.action, s.actionStrong, pressed && { opacity: 0.75 }]}
                       >
-                        <Text style={[s.actionText, { color: "#FFFFFF" }]}>
-                          {busy ? "Paying…" : `Accept · ${money(row.quote_amount ?? 0)}`}
-                        </Text>
+                        <Text style={[s.actionText, { color: "#FFFFFF" }]}>Accept &amp; pay</Text>
                       </Pressable>
                     ) : null}
 
                     {cancellable ? (
                       <Pressable
-                        onPress={() => void respond(row, "cancel")}
+                        onPress={() => void cancel(row)}
                         disabled={busy}
                         accessibilityRole="button"
                         accessibilityLabel={`Cancel request ${row.ref}`}
                         style={({ pressed }) => [s.action, pressed && { opacity: 0.75 }]}
                       >
-                        <Text style={s.actionText}>Cancel</Text>
+                        <Text style={s.actionText}>{busy ? "Working…" : "Cancel"}</Text>
                       </Pressable>
                     ) : null}
                   </View>
                 ) : null}
 
-                {quoted ? (
+                {quoted && !awaiting ? (
                   <Txt tone="body" size={9} style={{ marginTop: 10, lineHeight: 13 }}>
-                    Accepting pays it from your wallet.{" "}
+                    Pay from your wallet or by card.{" "}
                     <Text
                       style={s.link}
                       onPress={() => router.push("/account/wallet-topup")}
@@ -464,7 +565,17 @@ export default function SpecialOrdersScreen() {
                     >
                       Top up
                     </Text>{" "}
-                    if you need to.
+                    if you’d rather use store credit.
+                  </Txt>
+                ) : null}
+
+                {row.payment.method === "wallet" && row.amount_paid > 0 ? (
+                  <Txt tone="body" size={9} style={{ marginTop: 10, lineHeight: 13 }}>
+                    Paid from your wallet.
+                  </Txt>
+                ) : row.payment.method && row.amount_paid > 0 ? (
+                  <Txt tone="body" size={9} style={{ marginTop: 10, lineHeight: 13 }}>
+                    Paid by card · {row.payment.method === "paystack" ? "Paystack" : "Flutterwave"}.
                   </Txt>
                 ) : null}
               </Panel>
@@ -472,6 +583,16 @@ export default function SpecialOrdersScreen() {
           })}
         </>
       ) : null}
+
+      {/* The method choice lives on its own surface: it is the decision the
+          customer came here to make, not a third button in a list row. */}
+      <QuotePaySheet
+        order={paying}
+        open={paying !== null}
+        onClose={() => setPaying(null)}
+        onDone={paymentDone}
+        bottomInset={insets.bottom}
+      />
     </AccountShell>
   );
 }
@@ -519,8 +640,32 @@ const makeS = (t: Theme) => StyleSheet.create({
     paddingVertical: 12,
   },
 
+  /** A card payment we are still waiting on — warm, not alarming. */
+  awaiting: {
+    marginTop: 14,
+    backgroundColor: t.surfaces.noteTint,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  awaitingLabel: {
+    fontFamily: fonts.medium,
+    fontSize: 9,
+    letterSpacing: 1.4,
+    color: t.colors.gold2,
+    includeFontPadding: false,
+  },
+
+  /**
+   * A quoted request can offer three things at once — check an unanswered
+   * payment, pay, cancel — and three pills do not fit across 375px. They wrap
+   * instead, with a basis that keeps two on a line and lets a lone third grow
+   * to fill its own.
+   */
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 14 },
   action: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: "45%",
     height: 40,
     borderRadius: 20,
     backgroundColor: t.colors.primaryCont,

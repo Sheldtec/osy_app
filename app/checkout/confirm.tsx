@@ -1,11 +1,17 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+// `Thumb` is a sized photo well, not account chrome — it carries no card or
+// border language of its own, so the checkout can use the same one rather than
+// grow a second way of drawing a product thumbnail.
+import { Thumb } from "@/components/account-ui";
 import { Divider, Notice, SectionCard, SummaryRow } from "@/components/checkout-ui";
 import { CheckoutShell } from "@/components/checkout-shell";
+import { IconDocument } from "@/components/icons";
 import { GradientButton, Overline, Txt } from "@/components/ui";
+import { findMyOrderByRef, type Order } from "@/lib/account-api";
 import { useCart } from "@/lib/cart";
 import { useCheckout } from "@/lib/checkout";
 import {
@@ -16,10 +22,12 @@ import {
   type CryptoInstructions,
   type PaymentStatus,
 } from "@/lib/checkout-api";
-import { useApproxMoney } from "@/lib/currency-context";
+import { naira } from "@/lib/format";
+import { ApiError } from "@/lib/http";
+import { openOrderReceipt } from "@/lib/receipt";
 import type { Theme } from "@/theme/theme";
-import { useTheme } from "@/theme/theme-context";
-import { layout } from "@/theme/tokens";
+import { useTheme, useThemedStyles } from "@/theme/theme-context";
+import { fonts, layout } from "@/theme/tokens";
 
 /**
  * Checkout, step 3 — did the money arrive?
@@ -40,6 +48,12 @@ import { layout } from "@/theme/tokens";
  *     shopper's cart intact and they can retry without rebuilding it.
  *   · one reference space covers orders, wallet top-ups and instalments, so
  *     `kind` is asserted before any order copy is rendered.
+ *
+ * MONEY ON THIS SCREEN IS ₦, NOT THE DISPLAY CURRENCY. Everything here is a
+ * record of what was charged, and `useApproxMoney()` is for figures that are
+ * merely read. Where the gateway took another currency the order carries that
+ * amount too, and both are shown — the ₦ the books are in, and the figure the
+ * card statement will show.
  */
 
 /** Backing off rather than hammering: /payments/verify allows 30 a minute. */
@@ -47,7 +61,6 @@ const RETRY_MS = [2000, 3000, 5000, 10_000];
 
 export default function ConfirmStep() {
   const theme = useTheme();
-  const money = useApproxMoney();
   const insets = useSafeAreaInsets();
   const cart = useCart();
   const { pending, setPending, reset, ready } = useCheckout();
@@ -223,27 +236,24 @@ export default function ConfirmStep() {
 
   const paid = Boolean(status?.paid);
   const ref = status?.ref ?? pending?.orderRef ?? "";
-  const amount = status
-    ? status.charge_currency && status.charge_currency !== "NGN"
-      ? `${status.charge_amount} ${status.charge_currency}`
-      : money(status.total)
-    : pending
-      ? money(pending.total)
-      : "";
+  /**
+   * The amount, in Naira.
+   *
+   * `naira()` and not `money()`: this is a record of a charge, not a price
+   * being browsed, so it must match the books and the gateway rather than the
+   * shopper's chosen display currency. The foreign figure, when there is one,
+   * is shown BESIDE it rather than instead of it.
+   */
+  const amount = status ? naira(status.total) : pending ? naira(pending.total) : "";
+  const charged =
+    status && status.charge_currency && status.charge_currency !== "NGN"
+      ? `${status.charge_currency} ${status.charge_amount}`
+      : null;
 
   /* ---------------- paid ---------------- */
 
   if (paid) {
-    return (
-      <Result
-        tone="success"
-        overline="PAYMENT CONFIRMED"
-        title="Thank you — you’re all set"
-        body={`Order ${ref} is paid${amount ? ` — ${amount}` : ""}. Your unique traceable code ships with the unit.`}
-        primary={{ label: "Back to shop", onPress: () => router.replace("/") }}
-        secondary={{ label: "View my orders", onPress: () => router.replace("/profile") }}
-      />
-    );
+    return <PaidConfirmation orderRef={ref} amount={amount} charged={charged} bottomInset={insets.bottom} />;
   }
 
   /* ---------------- bank transfer / crypto ---------------- */
@@ -338,6 +348,362 @@ export default function ConfirmStep() {
       </View>
     </CheckoutShell>
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * Paid
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a shopper sees the moment their money clears.
+ *
+ * It used to be four lines of centred text and two buttons, which is the one
+ * place in the whole app where a customer most wants to see the thing they
+ * just bought: what it was, what it cost, what happens now, and something they
+ * can keep.
+ *
+ * Two sources, deliberately:
+ *
+ *   · the headline, the reference and the amount come from the VERIFICATION,
+ *     which has already answered. They render immediately — a confirmation
+ *     must never wait on a second request to tell someone their payment went
+ *     through.
+ *   · everything below comes from the ORDER ROW, fetched after. It is the
+ *     authoritative copy (the bag has just been emptied, and what the client
+ *     priced is not what the server charged), so it is worth the wait, and a
+ *     failure to load it costs the detail and not the confirmation.
+ */
+function PaidConfirmation({
+  orderRef,
+  amount,
+  charged,
+  bottomInset,
+}: {
+  orderRef: string;
+  amount: string;
+  /** e.g. "USD 428.66" when the gateway took another currency. Null for ₦. */
+  charged: string | null;
+  bottomInset: number;
+}) {
+  const theme = useTheme();
+  const styles = useThemedStyles(makeS);
+
+  const [order, setOrder] = useState<Order | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const [receiptBusy, setReceiptBusy] = useState(false);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!orderRef) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const found = await findMyOrderByRef(orderRef);
+      setOrder(found);
+      if (!found) {
+        // Paid, verified, and not in their list: the only sane reading is a
+        // lag we cannot see, so it says so rather than implying the order is
+        // missing.
+        setLoadError("Your payment is confirmed. The full details are still catching up — pull up your orders in a moment.");
+      }
+    } catch (err) {
+      setLoadError(
+        err instanceof ApiError ? err.message : "We couldn’t load the details of this order.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [orderRef]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function getReceipt() {
+    if (!order) return;
+    setReceiptBusy(true);
+    setReceiptError(null);
+    try {
+      await openOrderReceipt(order.id);
+    } catch (err) {
+      setReceiptError(
+        err instanceof ApiError ? err.message : "We couldn’t open your receipt just now.",
+      );
+    } finally {
+      setReceiptBusy(false);
+    }
+  }
+
+  return (
+    <CheckoutShell title="Payment" footerSpace={40}>
+      <View style={{ paddingHorizontal: layout.gutter, marginTop: 10 }}>
+        {/* ---- the confirmation itself ---- */}
+        <View style={{ alignItems: "center", paddingTop: 14 }}>
+          {/* Decorative: the overline and the headline already say this in
+              words, and a screen reader announcing a tick glyph adds nothing. */}
+          <View style={styles.crest} importantForAccessibility="no-hide-descendants" accessible={false}>
+            <Text style={styles.crestMark}>✓</Text>
+          </View>
+          <Overline>PAYMENT CONFIRMED</Overline>
+          <Txt tone="strong" display size={26} center style={{ marginTop: 10 }}>
+            Thank you — you’re all set
+          </Txt>
+          <Txt tone="body" size={13} center style={{ marginTop: 10, lineHeight: 20 }}>
+            We have your payment and your order is with our studio.
+          </Txt>
+        </View>
+
+        {/* ---- what was paid ----
+            The reference is selectable because it is the one string a customer
+            is ever asked to quote back to us. */}
+        <View style={{ marginTop: 20 }}>
+          <SectionCard>
+            <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.microLabel}>ORDER</Text>
+                <Txt tone="ink" size={15} weight="medium" selectable style={{ marginTop: 4 }}>
+                  {orderRef || "—"}
+                </Txt>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={styles.microLabel}>PAID</Text>
+                <Txt tone="ink" display size={22} style={{ marginTop: 2 }}>
+                  {amount}
+                </Txt>
+                {charged ? (
+                  <Txt tone="faint" size={11} style={{ marginTop: 2 }}>
+                    Charged {charged}
+                  </Txt>
+                ) : null}
+              </View>
+            </View>
+            {order?.payment_method ? (
+              <>
+                <Divider />
+                <Txt tone="faint" size={11} style={{ lineHeight: 16 }}>
+                  Paid by {methodLabel(order.payment_method)}.
+                </Txt>
+              </>
+            ) : null}
+          </SectionCard>
+        </View>
+
+        {/* ---- the order itself ---- */}
+        {loading ? (
+          <View style={{ alignItems: "center", paddingVertical: 28 }}>
+            <ActivityIndicator color={theme.colors.primary} />
+            <Txt tone="faint" size={11} style={{ marginTop: 10 }}>
+              Loading your order…
+            </Txt>
+          </View>
+        ) : loadError ? (
+          <View style={{ marginTop: 16 }}>
+            <Notice tone="info">{loadError}</Notice>
+            <Pressable
+              onPress={() => void load()}
+              accessibilityRole="button"
+              style={({ pressed }) => [{ marginTop: 14, alignItems: "center" }, pressed && { opacity: 0.7 }]}
+            >
+              <Txt tone="primary" size={13} weight="medium">
+                Try again
+              </Txt>
+            </Pressable>
+          </View>
+        ) : order ? (
+          <>
+            <View style={{ marginTop: 16 }}>
+              <SectionCard>
+                <Text style={styles.microLabel}>WHAT YOU BOUGHT</Text>
+                <View style={{ marginTop: 12, gap: 14 }}>
+                  {order.items.map((i) => (
+                    <View key={i.id} style={{ flexDirection: "row", gap: 12 }}>
+                      <Thumb
+                        src={i.image}
+                        seed={i.slug ?? String(i.id)}
+                        alt={i.name}
+                        width={50}
+                        height={58}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Txt tone="strong" size={12} weight="medium" style={{ lineHeight: 17 }}>
+                          {i.name}
+                        </Txt>
+                        {[i.length, i.colour, i.density].filter(Boolean).length ? (
+                          <Txt tone="body" size={10} style={{ marginTop: 3 }}>
+                            {[i.length, i.colour, i.density].filter(Boolean).join(" · ")}
+                          </Txt>
+                        ) : null}
+                        {i.preparation ? (
+                          <Txt tone="body" size={10} style={{ marginTop: 2 }}>
+                            {[i.preparation, i.preparation_style].filter(Boolean).join(" · ")}
+                          </Txt>
+                        ) : null}
+                        <View style={{ flexDirection: "row", marginTop: 6, alignItems: "center" }}>
+                          <Txt tone="faint" size={10} style={{ flex: 1 }}>
+                            Qty {i.qty}
+                          </Txt>
+                          <Txt tone="ink" size={12} weight="medium">
+                            {naira(i.line_total)}
+                          </Txt>
+                        </View>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+
+                <Divider />
+
+                <SummaryRow label="Subtotal" value={naira(order.totals.subtotal)} />
+                <SummaryRow
+                  label="Delivery & packaging"
+                  value={order.totals.delivery === 0 ? "Free" : naira(order.totals.delivery)}
+                  tone={order.totals.delivery === 0 ? "success" : "body"}
+                />
+                {order.totals.discount > 0 ? (
+                  <SummaryRow
+                    label={order.coupon_code ? `Discount (${order.coupon_code})` : "Discount"}
+                    value={`−${naira(order.totals.discount)}`}
+                    tone="success"
+                  />
+                ) : null}
+                <Divider />
+                <SummaryRow label="Total paid" value={naira(order.totals.total)} strong />
+              </SectionCard>
+            </View>
+
+            {/* ---- where it is going ---- */}
+            <View style={{ marginTop: 12 }}>
+              <SectionCard>
+                <Text style={styles.microLabel}>DELIVERING TO</Text>
+                <Txt tone="strong" size={12} weight="medium" style={{ marginTop: 8 }}>
+                  {order.customer.name}
+                </Txt>
+                <Txt tone="body" size={11} style={{ marginTop: 4, lineHeight: 17 }}>
+                  {[
+                    order.delivery.address,
+                    order.delivery.city,
+                    order.delivery.state,
+                    order.delivery.zip,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}
+                </Txt>
+              </SectionCard>
+            </View>
+
+            {/* ---- what happens now ----
+                The question every customer asks next, answered before they
+                have to go looking. The wigging lead time is the shop's own
+                promise on the product page and belongs here too, where it
+                changes what someone expects this week. */}
+            <View style={{ marginTop: 12 }}>
+              <SectionCard>
+                <Text style={styles.microLabel}>WHAT HAPPENS NEXT</Text>
+                <View style={{ marginTop: 12, gap: 14 }}>
+                  <NextStep
+                    n={1}
+                    title="We prepare your pieces"
+                    body="Each unit is checked and packed by hand. Wigging and styling add 2–3 working days."
+                  />
+                  <NextStep
+                    n={2}
+                    title="We send the dispatch details"
+                    body="The courier or waybill and its tracking number appear on this order as soon as it leaves us."
+                  />
+                  <NextStep
+                    n={3}
+                    title="Your traceable codes travel with it"
+                    body="Every unit carries its own code with full ownership history — it is what lets you resell it on Thrift later."
+                  />
+                </View>
+              </SectionCard>
+            </View>
+
+            {/* ---- the receipt ---- */}
+            {receiptError ? (
+              <View style={{ marginTop: 16 }}>
+                <Notice tone="danger">{receiptError}</Notice>
+              </View>
+            ) : null}
+
+            <GradientButton
+              label={receiptBusy ? "Opening…" : "View / print receipt"}
+              icon={<IconDocument width={18} height={18} color="#FFFFFF" />}
+              style={{ marginTop: 20 }}
+              disabled={receiptBusy}
+              onPress={() => void getReceipt()}
+            />
+            {/* Says exactly what the tap does. The receipt is a printable page,
+                not a PDF file this app generates, and promising otherwise is a
+                promise the customer discovers broken. */}
+            <Txt tone="faint" size={11} center style={{ marginTop: 10, lineHeight: 16 }}>
+              Opens in your browser — use its Print option to save a PDF copy.
+            </Txt>
+          </>
+        ) : null}
+
+        <Pressable
+          onPress={() => router.replace("/profile")}
+          accessibilityRole="button"
+          style={({ pressed }) => [{ marginTop: 22, alignItems: "center" }, pressed && { opacity: 0.7 }]}
+        >
+          <Txt tone="primary" size={13} weight="medium">
+            View my orders
+          </Txt>
+        </Pressable>
+
+        <Pressable
+          onPress={() => router.replace("/")}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            { marginTop: 14, marginBottom: bottomInset + 10, alignItems: "center" },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Txt tone="faint" size={12} weight="medium">
+            Back to shop
+          </Txt>
+        </Pressable>
+      </View>
+    </CheckoutShell>
+  );
+}
+
+/** One numbered line in "what happens next". */
+function NextStep({ n, title, body }: { n: number; title: string; body: string }) {
+  const styles = useThemedStyles(makeS);
+
+  return (
+    <View style={{ flexDirection: "row", gap: 12 }}>
+      <View style={styles.stepDot}>
+        <Text style={styles.stepNum}>{n}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Txt tone="strong" size={12} weight="medium">
+          {title}
+        </Txt>
+        <Txt tone="body" size={10.5} style={{ marginTop: 3, lineHeight: 16 }}>
+          {body}
+        </Txt>
+      </View>
+    </View>
+  );
+}
+
+/** The stored method id, in words a customer recognises. */
+function methodLabel(method: string): string {
+  if (method === "flutterwave") return "card (Flutterwave)";
+  if (method === "paystack") return "card (Paystack)";
+  if (method === "bank_transfer") return "bank transfer";
+  if (method === "crypto") return "crypto transfer";
+  if (method === "wallet") return "store credit";
+
+  return method.replace(/_/g, " ");
 }
 
 /* ------------------------------------------------------------------ *
@@ -459,32 +825,20 @@ function ManualInstructions({
  * Result scaffold
  * ------------------------------------------------------------------ */
 
+/** The dead ends: a reference we have nothing to do with. One way out each. */
 function Result({
-  tone,
-  overline,
   title,
   body,
   primary,
-  secondary,
 }: {
-  tone?: "success";
-  overline?: string;
   title: string;
   body: string;
   primary: { label: string; onPress: () => void };
-  secondary?: { label: string; onPress: () => void };
 }) {
   return (
     <CheckoutShell title="Payment" footerSpace={40}>
       <View style={{ alignItems: "center", paddingTop: 40, paddingHorizontal: 28 }}>
-        {overline ? <Overline>{overline}</Overline> : null}
-        <Txt
-          tone={tone === "success" ? "success" : "strong"}
-          display
-          size={25}
-          center
-          style={{ marginTop: 12 }}
-        >
+        <Txt tone="strong" display size={25} center>
           {title}
         </Txt>
         <Txt tone="body" size={13} center style={{ marginTop: 12, lineHeight: 20 }}>
@@ -495,17 +849,6 @@ function Result({
           style={{ marginTop: 28, alignSelf: "stretch" }}
           onPress={primary.onPress}
         />
-        {secondary ? (
-          <Pressable
-            onPress={secondary.onPress}
-            accessibilityRole="button"
-            style={({ pressed }) => [{ marginTop: 18 }, pressed && { opacity: 0.7 }]}
-          >
-            <Txt tone="primary" size={13} weight="medium">
-              {secondary.label}
-            </Txt>
-          </Pressable>
-        ) : null}
       </View>
     </CheckoutShell>
   );
@@ -592,4 +935,56 @@ const devBtn = (t: Theme) => ({
   borderColor: t.surfaces.lineCheckout,
   alignItems: "center" as const,
   justifyContent: "center" as const,
+});
+
+const makeS = (t: Theme) => StyleSheet.create({
+  /**
+   * The success mark.
+   *
+   * A tinted well rather than a filled purple disc: the screen already has one
+   * purple fill (the receipt button) and two compete for the eye. The tick
+   * carries the shop's success green, which is the same green the order
+   * timeline marks a completed step with.
+   */
+  crest: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: t.colors.successBg,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  crestMark: {
+    fontFamily: fonts.medium,
+    fontSize: 24,
+    color: t.colors.success,
+    includeFontPadding: false,
+  },
+
+  /** The checkout's own small caps label — not the gold storefront Overline. */
+  microLabel: {
+    fontFamily: fonts.medium,
+    fontSize: 9.5,
+    letterSpacing: 1.4,
+    color: t.textInk.faint,
+    includeFontPadding: false,
+  },
+
+  stepDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: t.colors.primaryCont,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepNum: {
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    // READ purple, so it has to be primaryOn — `primary` on this tint is a
+    // contrast failure in dark.
+    color: t.colors.primaryOn,
+    includeFontPadding: false,
+  },
 });

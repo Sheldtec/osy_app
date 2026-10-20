@@ -189,6 +189,7 @@ function Root() {
                     <Stack.Screen name="account/referrals" options={{ headerShown: false }} />
                     <Stack.Screen name="account/notifications" options={{ headerShown: false }} />
                     <Stack.Screen name="account/currency" options={{ headerShown: false }} />
+                    <Stack.Screen name="account/address" options={{ headerShown: false }} />
                     <Stack.Screen name="account/settings" options={{ headerShown: false }} />
                     <Stack.Screen name="account/appearance" options={{ headerShown: false }} />
                     <Stack.Screen name="account/legal/[slug]" options={{ headerShown: false }} />
@@ -196,6 +197,9 @@ function Root() {
                         header in the account language, so no navigator header. */}
                     <Stack.Screen name="concierge" options={{ headerShown: false }} />
                     <Stack.Screen name="try-on" options={{ headerShown: false }} />
+                    {/* Thrift resale. Both draw their own in-canvas header. */}
+                    <Stack.Screen name="thrift/index" options={{ headerShown: false }} />
+                    <Stack.Screen name="thrift/[slug]" options={{ headerShown: false }} />
                     {/* Auth is presented as a sheet over whatever asked for it. */}
                     <Stack.Screen
                       name="auth"

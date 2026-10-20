@@ -18,30 +18,60 @@ import { fonts, layout, radius } from "@/theme/tokens";
  *     on a screen that has no results to filter.
  *   · Shop is a live text field.
  *
- * Passing `value`/`onChangeText` selects the field; passing only `onPress`
- * selects the button. The two cannot drift apart visually because there is
- * only one set of styles.
+ * Passing `onChangeText` selects the field; passing only `onPress` selects the
+ * button. The two cannot drift apart visually because there is only one set of
+ * styles.
+ *
+ * A BUTTON STILL SHOWS `value`. The shop's bar opens the search sheet rather
+ * than typing in place, and a bar that reads "Search wigs, bundles,
+ * closures..." over a grid narrowed by a sentence is lying about the state of
+ * the screen — so the committed query takes the placeholder's spot, in ink
+ * rather than grey, with its own clear button.
  */
 
 const PLACEHOLDER = "Search wigs, bundles, closures...";
 
 interface Props {
-  /** Field mode: the current query. */
+  /** The current query — typed, in field mode; committed, in button mode. */
   value?: string;
   onChangeText?: (text: string) => void;
   /** Button mode: where tapping the pill goes. */
   onPress?: () => void;
+  /** Button mode: clear the committed query without opening anything. */
+  onClear?: () => void;
+  /** Called on the keyboard's search key. */
+  onSubmit?: () => void;
   /** The gradient button on the right. */
   onFilter?: () => void;
   filterLabel?: string;
   /** Active filter count — shows a badge on the button when above zero. */
   filterCount?: number;
+  /**
+   * Draw the gradient filter button at all.
+   *
+   * False inside the search sheet, which has nothing to filter: a gradient
+   * button that cannot do anything is worse than no button, because the
+   * shopper spends a tap and a little trust finding that out.
+   */
+  showFilter?: boolean;
   autoFocus?: boolean;
   style?: object;
 }
 
 export const SearchBar = forwardRef<TextInput, Props>(function SearchBar(
-  { value, onChangeText, onPress, onFilter, filterLabel = "Filter and sort", filterCount = 0, autoFocus, style },
+  {
+    value,
+    onChangeText,
+    onPress,
+    onClear,
+    onSubmit,
+    onFilter,
+    filterLabel = "Filter and sort",
+    filterCount = 0,
+    showFilter = true,
+    autoFocus,
+    style,
+  },
   ref,
 ) {
   const styles = useThemedStyles(makeStyles);
@@ -63,19 +93,24 @@ export const SearchBar = forwardRef<TextInput, Props>(function SearchBar(
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
+          onSubmitEditing={onSubmit}
           accessibilityLabel="Search the catalogue"
           style={styles.input}
         />
       ) : (
-        <Text style={styles.placeholder} numberOfLines={1}>
-          {PLACEHOLDER}
+        <Text
+          style={value ? styles.committed : styles.placeholder}
+          numberOfLines={1}
+        >
+          {value || PLACEHOLDER}
         </Text>
       )}
 
-      {/* Clearing is only reachable in field mode, and only with a query. */}
-      {isField && value ? (
+      {/* Clearing needs a query, and — in button mode — somewhere to send the
+          clear, since the bar does not own the committed one. */}
+      {value && (isField || onClear) ? (
         <Pressable
-          onPress={() => onChangeText?.("")}
+          onPress={() => (isField ? onChangeText?.("") : onClear?.())}
           hitSlop={10}
           accessibilityRole="button"
           accessibilityLabel="Clear search"
@@ -85,46 +120,54 @@ export const SearchBar = forwardRef<TextInput, Props>(function SearchBar(
         </Pressable>
       ) : null}
 
-      <View style={styles.divider} />
+      {showFilter ? (
+        <>
+          <View style={styles.divider} />
 
-      <Pressable
-        onPress={onFilter}
-        disabled={!onFilter}
-        accessibilityRole="button"
-        accessibilityLabel={
-          filterCount ? `${filterLabel}, ${filterCount} active` : filterLabel
-        }
-        style={({ pressed }) => [pressed && { opacity: 0.85 }]}
-      >
-        <View style={styles.filterWrap}>
-          <LinearGradient
-            colors={["#702B99", "#4F1775"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.filter}
+          <Pressable
+            onPress={onFilter}
+            disabled={!onFilter}
+            accessibilityRole="button"
+            accessibilityLabel={
+              filterCount ? `${filterLabel}, ${filterCount} active` : filterLabel
+            }
+            style={({ pressed }) => [pressed && { opacity: 0.85 }]}
           >
-            <IconFilter width={19} height={19} />
-          </LinearGradient>
-        </View>
-        {filterCount > 0 ? (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{filterCount}</Text>
-          </View>
-        ) : null}
-      </Pressable>
+            <View style={styles.filterWrap}>
+              <LinearGradient
+                colors={["#702B99", "#4F1775"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.filter}
+              >
+                <IconFilter width={19} height={19} />
+              </LinearGradient>
+            </View>
+            {filterCount > 0 ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{filterCount}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        </>
+      ) : null}
     </>
   );
 
+  // Without the filter button the right edge needs the left edge's padding,
+  // or the pill reads as having lost something off the end.
+  const bar = [styles.bar, !showFilter && styles.barBare];
+
   // A field must not sit inside a Pressable — the wrapper would swallow taps
   // meant for the caret and the clear button.
-  if (isField) return <View style={[styles.bar, style]}>{inner}</View>;
+  if (isField) return <View style={[bar, style]}>{inner}</View>;
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="search"
-      accessibilityLabel={PLACEHOLDER}
-      style={({ pressed }) => [styles.bar, pressed && { opacity: 0.9 }, style]}
+      accessibilityLabel={value ? `Search. Current search: ${value}` : PLACEHOLDER}
+      style={({ pressed }) => [bar, pressed && { opacity: 0.9 }, style]}
     >
       {inner}
     </Pressable>
@@ -158,7 +201,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     paddingRight: PAD,
     gap: 11,
   },
+  barBare: { paddingRight: 16 },
   placeholder: { flex: 1, fontFamily: fonts.body, fontSize: 13, color: t.textInk.body },
+  /** A committed query is content, not a prompt — it reads in ink. */
+  committed: { flex: 1, fontFamily: fonts.medium, fontSize: 13, color: t.colors.ink },
   input: {
     flex: 1,
     fontFamily: fonts.body,

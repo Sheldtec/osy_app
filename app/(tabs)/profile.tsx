@@ -9,34 +9,7 @@ import { NAV_CLEARANCE } from "@/components/glass-nav";
 import { getMyOrders, ORDER_BUCKETS, type Order } from "@/lib/account-api";
 import { useScrollReveal } from "@/lib/scroll-reveal";
 import { useWishlist } from "@/lib/wishlist";
-import {
-  AccountIconBg,
-  BadgeCount,
-  ChevronRight,
-  IconAddressBook,
-  IconBell,
-  IconGift,
-  IconEdit,
-  IconHelp,
-  IconPayment,
-  IconPreferences,
-  IconProcessing,
-  IconReview,
-  IconRewards,
-  IconSettings,
-  IconShipped,
-  IconSignOut,
-  IconDelivery,
-  IconTag,
-  IconToPay,
-  NavWallet,
-  IconVerified,
-  IdentityAccent,
-  OrderStatusBg,
-  PROFILE_PHOTO,
-  RewardsGlow,
-  RewardsIconBg,
-} from "@/components/icons";
+import { AccountIconBg, BadgeCount, ChevronRight, IconAddressBook, IconBell, IconDelivery, IconEdit, IconGift, IconHelp, IconPayment, IconPreferences, IconProcessing, IconReview, IconRewards, IconSettings, IconShipped, IconSignOut, IconTag, IconThrift, IconToPay, IconVerified, IdentityAccent, NavWallet, OrderStatusBg, PROFILE_PHOTO, RewardsGlow, RewardsIconBg } from "@/components/icons";
 import { GradientButton, Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { useStorefrontSettings } from "@/lib/settings";
@@ -116,7 +89,7 @@ const ACCOUNT_ROWS = [
   },
   {
     key: "coupons",
-    label: "My codes",
+    label: "Coupons",
     sub: "Discounts and offers you qualify for",
     Icon: IconPayment,
     href: "/account/coupons",
@@ -143,7 +116,7 @@ const ACCOUNT_ROWS = [
     // The same screen as My details: there is ONE delivery address on the
     // account, not an address book. It gets its own row because "address" is
     // the word people look for, not "details".
-    href: "/account/profile",
+    href: "/account/address",
   },
   {
     key: "special-orders",
@@ -206,6 +179,7 @@ const QUICK_TILES = [
   { key: "preorders", label: "Pre-orders", Icon: IconDelivery, href: "/account/preorders" },
   { key: "special", label: "Special", Icon: IconTag, href: "/account/special-orders" },
   { key: "saved", label: "Saved", Icon: IconAddressBook, href: "/account/wishlist" },
+  { key: "thrift", label: "Thrift", Icon: IconThrift, href: "/thrift" },
 ] as const;
 
 export default function ProfileScreen() {
@@ -356,7 +330,11 @@ export default function ProfileScreen() {
             </View>
           </View>
 
+          {/* This had no `onPress` at all — the fourth dead control found in
+              this screen's history, after the hamburger, the wishlist heart and
+              the Help centre row. It goes where its label promises. */}
           <Pressable
+            onPress={() => router.push("/account/profile")}
             accessibilityRole="button"
             accessibilityLabel="Edit profile"
             style={({ pressed }) => [styles.edit, pressed && { opacity: 0.85 }]}

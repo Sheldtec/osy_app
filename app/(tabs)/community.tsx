@@ -1,8 +1,10 @@
+import * as Clipboard from "expo-clipboard";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -14,11 +16,15 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { CircleBack, IconBackChevron, IconHeart, IconHeartOutline, IconSend } from "@/components/icons";
+import { CommunityActions } from "@/components/community-actions";
+import { CommunityMessageRow } from "@/components/community-message";
+import { IconBackChevron, IconReply, IconSend } from "@/components/icons";
 import { Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import {
   CommunityError,
+  MESSAGE_MAX,
+  deleteCommunityMessage,
   fetchCommunityFeed,
   likeCommunityMessage,
   sendCommunityMessage,
@@ -40,34 +46,47 @@ import { fonts, layout } from "@/theme/tokens";
  * enforces the room lock and per-member mutes; this screen reports what the
  * server says rather than trying to predict it.
  *
- * The list follows the conventions every messaging app shares, because they are
- * what make a chat readable rather than a stack of cards:
+ * Four things here are load-bearing, and each replaced something that was
+ * quietly wrong:
  *
- *   · consecutive messages from one person GROUP — the name appears once at the
- *     top of a run and the avatar once at the bottom, instead of repeating on
- *     every line and tripling the vertical cost of a quick back-and-forth;
- *   · the bubble's corner nearest its sender is squared off, which is what
- *     makes a column of bubbles read as "from this side" without a tail;
- *   · the timestamp shows once per run, not per message;
- *   · days are separated, so "4:45 PM" is never ambiguous.
+ *  · THE SEND IS OPTIMISTIC. It used to await the POST and only then clear the
+ *    input, so for the length of a round trip on a Lagos connection the message
+ *    you just sent was nowhere — still sitting in the box, with no bubble. Now
+ *    the bubble appears instantly with a clock on it, and is replaced by the
+ *    server's own row. A refused send turns that bubble red and PUTS THE TEXT
+ *    BACK in the composer, because the one thing worse than a failed message is
+ *    a failed message you have to retype.
+ *
+ *  · THE COMPOSER IS NOT ABSOLUTELY POSITIONED ANY MORE. It was
+ *    `position: absolute` inside a `KeyboardAvoidingView`, and KAV works by
+ *    padding its own box — which cannot move an absolute child. The composer
+ *    therefore sat under the keyboard on both platforms. It is now a flex
+ *    sibling of the list inside the KAV, which is the arrangement that actually
+ *    lifts.
+ *
+ *  · REPLIES ARE REACHABLE. `reply_to_id` has been accepted by the server from
+ *    the start and bubbles already rendered the quote, but nothing in the app
+ *    could create one. Swipe a bubble right, or hold it.
+ *
+ *  · THE LIST ONLY AUTOSCROLLS WHEN YOU ARE AT THE BOTTOM. Pinning to the
+ *    newest message unconditionally yanks the room out from under anyone
+ *    reading back through it, every four seconds. Scrolled up, a pill appears
+ *    with the number of messages that have landed since.
  */
 
 const POLL_MS = 4000;
 const GUTTER = layout.gutter;
 /** Messages this far apart start a new run even from the same person. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
+/** Within this many points of the bottom still counts as "at the bottom". */
+const AT_BOTTOM_SLOP = 90;
+
+/** A message the server has not confirmed yet. Negative ids never collide. */
+type Local = CommunityMessage & { pending?: boolean; failed?: boolean };
 
 type Row =
   | { kind: "day"; key: string; label: string }
-  | {
-      kind: "msg";
-      key: string;
-      message: CommunityMessage;
-      /** First of a run — carries the name. */
-      first: boolean;
-      /** Last of a run — carries the avatar, the time and the bubble's corner. */
-      last: boolean;
-    };
+  | { kind: "msg"; key: string; message: Local; first: boolean; last: boolean };
 
 function dayLabel(d: Date): string {
   const today = new Date();
@@ -84,21 +103,8 @@ function dayLabel(d: Date): string {
   });
 }
 
-function timeOf(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-
-  return Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
-
-function initials(name: string): string {
-  return name.trim().charAt(0).toUpperCase() || "?";
-}
-
 /** Flatten the feed into day separators and grouped message rows. */
-function buildRows(messages: CommunityMessage[]): Row[] {
+function buildRows(messages: Local[]): Row[] {
   const rows: Row[] = [];
   let lastDay = "";
 
@@ -113,8 +119,9 @@ function buildRows(messages: CommunityMessage[]): Row[] {
 
     const prev = messages[i - 1];
     const next = messages[i + 1];
-    const near = (a?: CommunityMessage, b?: CommunityMessage) => {
+    const near = (a?: Local, b?: Local) => {
       if (!a?.at || !b?.at) return false;
+
       return Math.abs(new Date(b.at).getTime() - new Date(a.at).getTime()) < GROUP_WINDOW_MS;
     };
 
@@ -141,7 +148,7 @@ function buildRows(messages: CommunityMessage[]): Row[] {
 
 export default function CommunityScreen() {
   const theme = useTheme();
-  const styles = useThemedStyles(makeStyles);
+  const s = useThemedStyles(makeS);
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
 
@@ -150,13 +157,47 @@ export default function CommunityScreen() {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+
+  /** Sent-but-unconfirmed bubbles, appended after the server's own messages. */
+  const [outbox, setOutbox] = useState<Local[]>([]);
+  /** The message being replied to, quoted above the composer. */
+  const [replyTo, setReplyTo] = useState<CommunityMessage | null>(null);
+  /** The message whose action sheet is open. */
+  const [acting, setActing] = useState<CommunityMessage | null>(null);
+
   const listRef = useRef<FlatList<Row>>(null);
+  const inputRef = useRef<TextInput>(null);
+  /**
+   * Whether the reader is parked at the newest message.
+   *
+   * A ref, not state: it is written from `onScroll` on every frame and read by
+   * the poll's effect, and routing that through a re-render would re-render the
+   * whole list while the finger is still moving.
+   */
+  const atBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  /** Messages that landed while the reader was scrolled away. */
+  const [unseen, setUnseen] = useState(0);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const data = await fetchCommunityFeed(signal);
       if (data) {
-        setFeed(data);
+        setFeed((prev) => {
+          // Count only what arrived while the reader was elsewhere, and only
+          // other people's: your own message is why you are at the bottom.
+          if (prev && !atBottom.current) {
+            const before = prev.messages.at(-1)?.id ?? 0;
+            const fresh = data.messages.filter((m) => m.id > before && !m.mine).length;
+            if (fresh > 0) setUnseen((n) => n + fresh);
+          }
+
+          return data;
+        });
+        // Anything the server has now acknowledged can leave the outbox.
+        setOutbox((out) =>
+          out.filter((o) => o.failed || !data.messages.some((m) => m.mine && m.body === o.body)),
+        );
         setError(null);
       }
     } catch (e) {
@@ -181,256 +222,356 @@ export default function CommunityScreen() {
     };
   }, [load]);
 
-  const rows = useMemo(() => buildRows(feed?.messages ?? []), [feed?.messages]);
+  const messages = useMemo<Local[]>(
+    () => [...(feed?.messages ?? []), ...outbox],
+    [feed?.messages, outbox],
+  );
+  const rows = useMemo(() => buildRows(messages), [messages]);
 
-  // Pin to the newest message whenever one arrives. onContentSizeChange alone
-  // is not enough: it can fire before avatars finish loading and grow the list,
-  // which leaves the newest message below the fold — the one message a chat
-  // must never hide.
-  const newestId = feed?.messages.at(-1)?.id ?? null;
+  const toBottom = useCallback((animated = true) => {
+    // An offset past the end is clamped, so overshooting is free — and it is
+    // the only option when the row has not been laid out yet.
+    listRef.current?.scrollToOffset({ offset: Number.MAX_SAFE_INTEGER, animated });
+    atBottom.current = true;
+    setUnseen(0);
+    setShowJump(false);
+  }, []);
+
+  // Follow the newest message, but ONLY for a reader who is already there.
+  const newestKey = messages.at(-1)?.id ?? null;
   useEffect(() => {
-    if (newestId === null) return;
-    // A large offset rather than a measured one: this fires on a new message,
-    // before the row has been laid out, so there is no correct height to ask
-    // for yet. The list clamps it to the real end.
-    const t = setTimeout(
-      () => listRef.current?.scrollToOffset({ offset: Number.MAX_SAFE_INTEGER, animated: false }),
-      80,
-    );
+    if (newestKey === null || !atBottom.current) return;
+    const t = setTimeout(() => toBottom(false), 60);
 
     return () => clearTimeout(t);
-  }, [newestId]);
+  }, [newestKey, toBottom]);
 
   async function send() {
     const body = draft.trim();
     if (!body || sending) return;
 
+    const quoted = replyTo;
+    // Optimistic bubble. A negative id cannot collide with a server row, and
+    // `pending` is what draws the clock instead of the sent tick.
+    const temp: Local = {
+      id: -Date.now(),
+      user_id: user?.id ?? null,
+      name: user?.name ?? "You",
+      avatar: user?.avatar ?? null,
+      team: false,
+      mine: true,
+      type: "text",
+      body,
+      product: null,
+      reply: quoted ? { id: quoted.id, name: quoted.name, body: quoted.body ?? "" } : null,
+      likes: 0,
+      liked: false,
+      at: new Date().toISOString(),
+      pending: true,
+    };
+
     setSending(true);
     setError(null);
+    setDraft("");
+    setReplyTo(null);
+    setOutbox((out) => [...out, temp]);
+    atBottom.current = true;
+
     try {
-      await sendCommunityMessage(body);
-      setDraft("");
+      await sendCommunityMessage(body, quoted?.id ?? null);
+      // Dropped here rather than swapped in place: the very next poll carries
+      // the server's own row, with its real id, and two copies of one message
+      // for a few hundred milliseconds is worse than none.
+      setOutbox((out) => out.filter((o) => o.id !== temp.id));
       await load();
     } catch (e) {
+      setOutbox((out) =>
+        out.map((o) => (o.id === temp.id ? { ...o, pending: false, failed: true } : o)),
+      );
+      // Give the text back. Retyping a refused message is the insult on top of
+      // the injury, and the refusal is usually a mute or a lock — something
+      // the words had nothing to do with.
+      setDraft(body);
+      setReplyTo(quoted);
       setError(e instanceof CommunityError ? e.message : "Message not sent. Please try again.");
     } finally {
       setSending(false);
     }
   }
 
-  async function like(m: CommunityMessage) {
-    if (!user) {
-      router.push("/auth");
-      return;
-    }
-    // Optimistic: a like is cheap to undo, and the round trip is the whole
-    // perceived cost of tapping a heart.
-    setFeed((f) =>
-      f
-        ? {
-            ...f,
-            messages: f.messages.map((x) =>
-              x.id === m.id ? { ...x, liked: !x.liked, likes: x.likes + (x.liked ? -1 : 1) } : x,
-            ),
-          }
-        : f,
-    );
-    try {
-      await likeCommunityMessage(m.id);
-    } catch {
-      void load(); // put it back the way the server sees it
-    }
-  }
+  const like = useCallback(
+    async (m: CommunityMessage) => {
+      if (!user) {
+        router.push("/auth");
+
+        return;
+      }
+      // Optimistic: a like is cheap to undo, and the round trip is the whole
+      // perceived cost of tapping a heart.
+      setFeed((f) =>
+        f
+          ? {
+              ...f,
+              messages: f.messages.map((x) =>
+                x.id === m.id ? { ...x, liked: !x.liked, likes: x.likes + (x.liked ? -1 : 1) } : x,
+              ),
+            }
+          : f,
+      );
+      try {
+        await likeCommunityMessage(m.id);
+      } catch {
+        void load(); // put it back the way the server sees it
+      }
+    },
+    [user, load],
+  );
+
+  const startReply = useCallback((m: CommunityMessage) => {
+    setReplyTo(m);
+    inputRef.current?.focus();
+  }, []);
+
+  const copy = useCallback((m: CommunityMessage) => {
+    void Clipboard.setStringAsync(m.body ?? "");
+  }, []);
+
+  const remove = useCallback(
+    (m: CommunityMessage) => {
+      Alert.alert(
+        "Delete this message?",
+        "It will disappear for everyone in the room. This cannot be undone.",
+        [
+          { text: "Keep it", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              // Gone from the list at once; the poll confirms it. A delete that
+              // waits for a round trip reads as a tap that did nothing.
+              setFeed((f) => (f ? { ...f, messages: f.messages.filter((x) => x.id !== m.id) } : f));
+              deleteCommunityMessage(m.id).catch((e) => {
+                setError(
+                  e instanceof CommunityError ? e.message : "That message could not be deleted.",
+                );
+                void load();
+              });
+            },
+          },
+        ],
+      );
+    },
+    [load],
+  );
+
+  const openProduct = useCallback((slug: string) => {
+    router.push({ pathname: "/product/[slug]", params: { slug } });
+  }, []);
 
   const muted = feed?.me?.muted ?? false;
   const locked = feed?.locked ?? false;
   const canPost = Boolean(user) && !muted && (!locked || Boolean(feed?.me?.is_admin));
+  const near = draft.length > MESSAGE_MAX - 60;
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
-      {/* No title: the screen is the room, and naming it again above the
-          messages only costs the height the conversation wants. The back
-          control is NOT optional — this tab hides the bottom bar. */}
-      <View style={styles.header}>
+    <View style={[s.screen, { paddingTop: insets.top }]}>
+      {/* ---- header: the room, as a chat header rather than a bare back arrow ---- */}
+      <View style={s.header}>
         <Pressable
           onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
-          hitSlop={8}
+          hitSlop={10}
           accessibilityRole="button"
           accessibilityLabel="Back"
-          style={styles.backBtn}
+          style={({ pressed }) => [s.back, pressed && { opacity: 0.6 }]}
         >
-          <IconBackChevron width={19} height={19} color={theme.textInk.strong} />
+          <IconBackChevron width={20} height={20} color={theme.textInk.strong} />
         </Pressable>
 
-        <Txt tone="body" size={11.5} style={styles.headerMeta}>
-          {feed ? `${feed.members.toLocaleString()} members` : "Loading…"}
-          {locked ? " · paused" : ""}
-        </Txt>
+        {/* The brand monogram. A literal, not a constant: `lib/site.ts` is the
+            WEBSITE's one-line wordmark switch and has no counterpart here. */}
+        <View style={s.roomAvatar}>
+          <Text style={s.roomAvatarText}>O</Text>
+        </View>
+
+        <View style={{ flex: 1 }}>
+          <Text style={s.roomName} numberOfLines={1}>
+            Community
+          </Text>
+          <Text style={s.roomMeta} numberOfLines={1}>
+            {feed
+              ? `${feed.members.toLocaleString()} member${feed.members === 1 ? "" : "s"}${locked ? " · paused" : ""}`
+              : "Loading…"}
+          </Text>
+        </View>
       </View>
 
-      {loading && !feed ? (
-        <View style={styles.centre}>
-          <ActivityIndicator color={theme.colors.primary} />
-        </View>
-      ) : (
-        <FlatList
-          ref={listRef}
-          data={rows}
-          keyExtractor={(r) => r.key}
-          contentContainerStyle={{
-            paddingHorizontal: GUTTER,
-            paddingTop: 4,
-            // Clears the composer at its TALLEST: the input grows to 96pt
-            // before it scrolls, plus its padding and the bottom offset.
-            paddingBottom: insets.bottom + 132,
-          }}
-          showsVerticalScrollIndicator={false}
-          // scrollToOffset with the height the list just MEASURED, not
-          // scrollToEnd. scrollToEnd resolves the end from the height the list
-          // knew a moment ago, so with avatars still loading it lands short —
-          // measured at ~140pt short, which is exactly enough to hide the
-          // newest message. An offset past the end is clamped, so overshooting
-          // is free.
-          onContentSizeChange={(_w, h) => listRef.current?.scrollToOffset({ offset: h, animated: false })}
-          ListEmptyComponent={
-            <View style={styles.centre}>
-              <Txt tone="body" size={13} style={{ textAlign: "center" }}>
-                Nothing here yet. Say hello and start the conversation.
-              </Txt>
-            </View>
-          }
-          renderItem={({ item }) => {
-            if (item.kind === "day") {
-              return (
-                <View style={styles.dayWrap}>
-                  <Text style={styles.dayChip}>{item.label}</Text>
+      <KeyboardAvoidingView
+        style={s.body}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        // The header stays put; only the area below it compresses. Without this
+        // the whole screen lifts and the header slides off the top.
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : insets.top}
+      >
+        {loading && !feed ? (
+          <View style={s.centre}>
+            <ActivityIndicator color={theme.colors.primaryOn} />
+          </View>
+        ) : (
+          <View style={{ flex: 1 }}>
+            <FlatList
+              ref={listRef}
+              data={rows}
+              keyExtractor={(r) => r.key}
+              contentContainerStyle={s.listContent}
+              showsVerticalScrollIndicator={false}
+              keyboardDismissMode="interactive"
+              onScroll={(e) => {
+                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                const distance = contentSize.height - layoutMeasurement.height - contentOffset.y;
+                const was = atBottom.current;
+                atBottom.current = distance <= AT_BOTTOM_SLOP;
+                if (atBottom.current !== was) {
+                  setShowJump(!atBottom.current);
+                  if (atBottom.current) setUnseen(0);
+                }
+              }}
+              scrollEventThrottle={64}
+              onContentSizeChange={() => {
+                if (atBottom.current) {
+                  listRef.current?.scrollToOffset({
+                    offset: Number.MAX_SAFE_INTEGER,
+                    animated: false,
+                  });
+                }
+              }}
+              ListEmptyComponent={
+                <View style={s.centre}>
+                  <Txt tone="body" size={13} center style={{ lineHeight: 19 }}>
+                    Nothing here yet. Say hello and start the conversation.
+                  </Txt>
                 </View>
-              );
-            }
+              }
+              renderItem={({ item }) => {
+                if (item.kind === "day") {
+                  return (
+                    <View style={s.dayWrap}>
+                      <Text style={s.dayChip}>{item.label}</Text>
+                    </View>
+                  );
+                }
 
-            const m = item.message;
-            const mine = m.mine;
+                return (
+                  <CommunityMessageRow
+                    message={item.message}
+                    first={item.first}
+                    last={item.last}
+                    onReply={startReply}
+                    onLongPress={setActing}
+                    onLike={like}
+                    onOpenProduct={openProduct}
+                  />
+                );
+              }}
+            />
 
-            return (
-              <View style={[styles.row, mine && styles.rowMine, item.last && styles.rowRunEnd]}>
-                {/* The gutter is held even on grouped messages, so a run's
-                    bubbles stay in one column instead of stepping left. */}
-                {!mine && (
-                  <View style={styles.avatarSlot}>
-                    {item.last &&
-                      (m.avatar ? (
-                        <Image source={{ uri: m.avatar }} style={styles.avatar} contentFit="cover" />
-                      ) : (
-                        <View style={[styles.avatar, styles.avatarFallback]}>
-                          <Text style={styles.avatarText}>{initials(m.name)}</Text>
-                        </View>
-                      ))}
+            {/* ---- jump to the newest, with what you have missed ---- */}
+            {showJump && (
+              <Pressable
+                onPress={() => toBottom()}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  unseen > 0 ? `${unseen} new messages. Jump to the latest.` : "Jump to the latest"
+                }
+                style={({ pressed }) => [s.jump, pressed && { opacity: 0.85 }]}
+              >
+                <Text style={s.jumpChevron}>⌄</Text>
+                {unseen > 0 && (
+                  <View style={s.jumpBadge}>
+                    <Text style={s.jumpBadgeText}>{unseen > 99 ? "99+" : unseen}</Text>
                   </View>
                 )}
+              </Pressable>
+            )}
+          </View>
+        )}
 
-                <View style={[styles.stack, mine && styles.stackMine]}>
-                  {item.first && !mine && (
-                    <View style={styles.nameRow}>
-                      <Text style={styles.name}>{m.name}</Text>
-                      {m.team && <Text style={styles.teamTag}>Team</Text>}
-                    </View>
-                  )}
+        {error && <Text style={s.error}>{error}</Text>}
 
-                  <Pressable
-                    onLongPress={() => like(m)}
-                    delayLongPress={250}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${m.name}: ${m.body ?? ""}. Hold to ${m.liked ? "remove your like" : "like"}.`}
-                    style={[
-                      styles.bubble,
-                      mine ? styles.bubbleMine : styles.bubbleTheirs,
-                      // Square off the corner nearest the sender, on the last
-                      // bubble of a run. This is what makes a column read as
-                      // "from this side" without drawing a tail.
-                      item.last && (mine ? styles.tailMine : styles.tailTheirs),
-                    ]}
-                  >
-                    {m.reply && (
-                      <View style={[styles.quote, mine && styles.quoteMine]}>
-                        <Text style={[styles.quoteName, mine && styles.quoteNameMine]} numberOfLines={1}>
-                          {m.reply.name}
-                        </Text>
-                        <Text style={[styles.quoteBody, mine && styles.quoteBodyMine]} numberOfLines={2}>
-                          {m.reply.body}
-                        </Text>
-                      </View>
-                    )}
-                    <Text style={[styles.body, mine && styles.bodyMine]}>{m.body}</Text>
-                  </Pressable>
-
-                  {/* Reactions sit under the bubble and only exist once someone
-                      has used one — an empty affordance on every message is
-                      the clutter that makes a chat look unfinished. */}
-                  {m.likes > 0 && (
-                    <Pressable
-                      onPress={() => like(m)}
-                      hitSlop={6}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${m.likes} like${m.likes === 1 ? "" : "s"}`}
-                      style={[styles.likePill, mine && styles.likePillMine]}
-                    >
-                      {m.liked ? (
-                        <IconHeart width={11} height={11} color={theme.colors.primaryOn} />
-                      ) : (
-                        <IconHeartOutline width={11} height={11} color={theme.textInk.faint} />
-                      )}
-                      <Text style={styles.likeCount}>{m.likes}</Text>
-                    </Pressable>
-                  )}
-
-                  {item.last && <Text style={[styles.time, mine && styles.timeMine]}>{timeOf(m.at)}</Text>}
-                </View>
-              </View>
-            );
-          }}
-        />
-      )}
-
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={insets.top}
-      >
-        <View style={[styles.composer, { bottom: Math.max(insets.bottom, 10) }]}>
+        {/* ---- composer ---- */}
+        <View style={[s.composerWrap, { paddingBottom: Math.max(insets.bottom, 10) }]}>
           {canPost ? (
             <>
-              <TextInput
-                value={draft}
-                onChangeText={setDraft}
-                placeholder="Message the community…"
-                placeholderTextColor={theme.textInk.faint}
-                style={styles.input}
-                multiline
-                maxLength={1000}
-                accessibilityLabel="Your message"
-              />
-              <Pressable
-                onPress={send}
-                disabled={sending || draft.trim().length === 0}
-                accessibilityRole="button"
-                accessibilityLabel="Send"
-                style={({ pressed }) => [
-                  styles.send,
-                  (sending || draft.trim().length === 0) && styles.sendIdle,
-                  pressed && { opacity: 0.8 },
-                ]}
-              >
-                <IconSend width={17} height={17} />
-              </Pressable>
+              {replyTo && (
+                <View style={s.replyBar}>
+                  <IconReply width={15} height={15} color={theme.colors.primaryOn} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.replyName} numberOfLines={1}>
+                      {replyTo.mine ? "Replying to yourself" : `Replying to ${replyTo.name}`}
+                    </Text>
+                    <Text style={s.replyBody} numberOfLines={1}>
+                      {replyTo.type === "product"
+                        ? ((replyTo.product as { name?: string } | null)?.name ?? "Product")
+                        : (replyTo.body ?? "")}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setReplyTo(null)}
+                    hitSlop={10}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel reply"
+                    style={s.replyClose}
+                  >
+                    <Text style={s.replyCloseText}>✕</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              <View style={s.composer}>
+                <TextInput
+                  ref={inputRef}
+                  value={draft}
+                  onChangeText={setDraft}
+                  placeholder="Message the community…"
+                  placeholderTextColor={theme.textInk.faint}
+                  style={s.input}
+                  multiline
+                  // The server's own ceiling (CommunityController::send
+                  // validates max:500). It used to be 1000 here, so a long
+                  // message typed fine and was then refused on send.
+                  maxLength={MESSAGE_MAX}
+                  accessibilityLabel="Your message"
+                />
+                <Pressable
+                  onPress={send}
+                  disabled={sending || draft.trim().length === 0}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send"
+                  style={({ pressed }) => [
+                    s.send,
+                    (sending || draft.trim().length === 0) && s.sendIdle,
+                    pressed && { opacity: 0.8 },
+                  ]}
+                >
+                  <IconSend width={17} height={17} />
+                </Pressable>
+              </View>
+
+              {/* Only once it is nearly spent — a counter on an empty box is
+                  a limit announced before anyone has met it. */}
+              {near && (
+                <Text style={s.counter}>
+                  {MESSAGE_MAX - draft.length} character
+                  {MESSAGE_MAX - draft.length === 1 ? "" : "s"} left
+                </Text>
+              )}
             </>
           ) : (
             <Pressable
               onPress={() => (user ? undefined : router.push("/auth"))}
-              style={styles.notice}
+              style={s.notice}
               accessibilityRole={user ? "text" : "button"}
             >
-              <Text style={styles.noticeText}>
+              <Text style={s.noticeText}>
                 {!user
                   ? "Sign in to join the conversation"
                   : muted
@@ -441,128 +582,123 @@ export default function CommunityScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <CommunityActions
+        message={acting}
+        canDelete={Boolean(acting?.mine)}
+        onClose={() => setActing(null)}
+        onReply={startReply}
+        onCopy={copy}
+        onLike={like}
+        onDelete={remove}
+      />
     </View>
   );
 }
 
-/** Bubble geometry, in one place so the squared corner always matches. */
-const BUBBLE_RADIUS = 18;
-const TAIL_RADIUS = 5;
-const AVATAR = 28;
+const makeS = (t: Theme) => StyleSheet.create({
+  screen: { flex: 1, backgroundColor: t.colors.surface },
+  body: { flex: 1, backgroundColor: t.surfaces.chat },
 
-const makeStyles = (t: Theme) => StyleSheet.create({
-  screen: { flex: 1, backgroundColor: t.surfaces.home },
+  /**
+   * The header is on `surface`, not on the chat ground.
+   *
+   * Every messenger separates the two: the bar that names the room is chrome,
+   * the area below it is the conversation. One continuous colour is what made
+   * this screen read as a feed with a back arrow on it.
+   */
   header: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    paddingHorizontal: GUTTER,
-    paddingBottom: 8,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
     backgroundColor: t.colors.surface,
-    borderWidth: 1,
-    borderColor: t.surfaces.line,
+    borderBottomWidth: 1,
+    borderBottomColor: t.surfaces.lineSoft,
+  },
+  back: { width: 32, height: 40, alignItems: "flex-start", justifyContent: "center" },
+  roomAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: t.colors.primary,
     alignItems: "center",
     justifyContent: "center",
   },
-  headerMeta: { flex: 1 },
-  centre: { paddingTop: 60, alignItems: "center", paddingHorizontal: GUTTER },
+  roomAvatarText: {
+    fontFamily: fonts.display,
+    fontSize: 17,
+    color: "#FFFFFF",
+    includeFontPadding: false,
+  },
+  roomName: {
+    fontFamily: fonts.medium,
+    fontSize: 15.5,
+    color: t.textInk.strong,
+    includeFontPadding: false,
+  },
+  roomMeta: {
+    fontFamily: fonts.body,
+    fontSize: 11.5,
+    color: t.textInk.faint,
+    marginTop: 2,
+    includeFontPadding: false,
+  },
 
-  dayWrap: { alignItems: "center", marginVertical: 14 },
+  centre: { paddingTop: 60, alignItems: "center", paddingHorizontal: GUTTER },
+  listContent: { paddingHorizontal: GUTTER, paddingTop: 10, paddingBottom: 12 },
+
+  dayWrap: { alignItems: "center", marginVertical: 12 },
   dayChip: {
     fontFamily: fonts.medium,
     fontSize: 10.5,
-    letterSpacing: 0.3,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
     color: t.textInk.faint,
-    backgroundColor: t.colors.surface,
-    borderWidth: 1,
-    borderColor: t.surfaces.lineProduct,
-    paddingHorizontal: 11,
-    paddingVertical: 4,
-    borderRadius: 11,
+    backgroundColor: t.surfaces.chatBubble,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 12,
     overflow: "hidden",
   },
 
-  // 2pt inside a run, 10pt between runs — the gap is what the eye reads as
-  // "someone else is speaking now".
-  row: { flexDirection: "row", alignItems: "flex-end", gap: 7, marginBottom: 2 },
-  rowMine: { justifyContent: "flex-end" },
-  rowRunEnd: { marginBottom: 10 },
-
-  avatarSlot: { width: AVATAR, height: AVATAR, justifyContent: "flex-end" },
-  avatar: { width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, backgroundColor: t.colors.imgBg },
-  avatarFallback: {
+  jump: {
+    position: "absolute",
+    right: GUTTER,
+    bottom: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: t.surfaces.chatBubble,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: t.colors.primaryCont,
   },
-  avatarText: { fontFamily: fonts.medium, fontSize: 11, color: t.colors.primaryOn },
-
-  stack: { maxWidth: "76%", alignItems: "flex-start" },
-  stackMine: { alignItems: "flex-end", marginLeft: "auto" },
-
-  nameRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4, paddingLeft: 2 },
-  name: { fontFamily: fonts.medium, fontSize: 11.5, color: t.textInk.strong },
-  teamTag: {
-    fontFamily: fonts.medium,
-    fontSize: 8.5,
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-    color: t.colors.primaryOn,
-    backgroundColor: t.colors.primaryCont,
+  jumpChevron: {
+    fontFamily: fonts.body,
+    fontSize: 20,
+    lineHeight: 22,
+    color: t.textInk.body,
+    marginTop: -2,
+  },
+  jumpBadge: {
+    position: "absolute",
+    top: -5,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
     paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    borderRadius: 6,
-    overflow: "hidden",
-  },
-
-  bubble: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: BUBBLE_RADIUS },
-  bubbleTheirs: {
-    backgroundColor: t.colors.surface,
-    borderWidth: 1,
-    borderColor: t.surfaces.lineProduct,
-  },
-  bubbleMine: { backgroundColor: t.colors.primary },
-  tailTheirs: { borderBottomLeftRadius: TAIL_RADIUS },
-  tailMine: { borderBottomRightRadius: TAIL_RADIUS },
-
-  body: { fontFamily: fonts.body, fontSize: 14, lineHeight: 19.5, color: t.textInk.strong },
-  bodyMine: { color: "#FFFFFF" },
-
-  quote: {
-    borderLeftWidth: 2,
-    borderLeftColor: t.colors.gold2,
-    paddingLeft: 8,
-    marginBottom: 6,
-  },
-  quoteMine: { borderLeftColor: "rgba(255,255,255,0.55)" },
-  quoteName: { fontFamily: fonts.medium, fontSize: 10.5, color: t.colors.gold2 },
-  quoteNameMine: { color: "rgba(255,255,255,0.9)" },
-  quoteBody: { fontFamily: fonts.body, fontSize: 11, color: t.textInk.faint },
-  quoteBodyMine: { color: "rgba(255,255,255,0.75)" },
-
-  likePill: {
-    flexDirection: "row",
+    backgroundColor: t.colors.primary,
     alignItems: "center",
-    gap: 3,
-    marginTop: -6,
-    marginLeft: 8,
-    backgroundColor: t.colors.surface,
-    borderWidth: 1,
-    borderColor: t.surfaces.lineProduct,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 9,
+    justifyContent: "center",
   },
-  likePillMine: { marginLeft: 0, marginRight: 8 },
-  likeCount: { fontFamily: fonts.medium, fontSize: 10, color: t.textInk.faint },
-
-  time: { fontFamily: fonts.body, fontSize: 10, color: t.textInk.faint, marginTop: 3, paddingLeft: 2 },
-  timeMine: { paddingLeft: 0, paddingRight: 2 },
+  jumpBadgeText: {
+    fontFamily: fonts.medium,
+    fontSize: 10,
+    color: "#FFFFFF",
+    includeFontPadding: false,
+  },
 
   error: {
     fontFamily: fonts.body,
@@ -573,40 +709,67 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     paddingBottom: 6,
   },
 
+  composerWrap: {
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    backgroundColor: t.colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: t.surfaces.lineSoft,
+  },
+  replyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: t.surfaces.actionTint,
+    borderLeftWidth: 3,
+    borderLeftColor: t.colors.gold2,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  replyName: { fontFamily: fonts.medium, fontSize: 11, color: t.colors.primaryOn },
+  replyBody: { fontFamily: fonts.body, fontSize: 11.5, color: t.textInk.faint, marginTop: 1 },
+  replyClose: { width: 24, height: 24, alignItems: "center", justifyContent: "center" },
+  replyCloseText: { fontFamily: fonts.body, fontSize: 13, color: t.textInk.faint },
+
   composer: {
-    position: "absolute",
-    left: GUTTER,
-    right: GUTTER,
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 8,
-    backgroundColor: t.colors.surface,
-    borderWidth: 1,
-    borderColor: t.surfaces.lineSearch,
-    borderRadius: 24,
-    paddingLeft: 16,
-    paddingRight: 6,
-    paddingVertical: 6,
   },
   input: {
     flex: 1,
     fontFamily: fonts.body,
-    fontSize: 14,
+    fontSize: 14.5,
     color: t.colors.ink,
-    maxHeight: 96,
-    paddingTop: 8,
-    paddingBottom: 8,
+    backgroundColor: t.surfaces.stepperTrack,
+    borderRadius: 22,
+    maxHeight: 108,
+    minHeight: 42,
+    paddingHorizontal: 16,
+    paddingTop: 11,
+    paddingBottom: 11,
   },
   send: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: t.colors.primary,
     alignItems: "center",
     justifyContent: "center",
   },
-  sendIdle: { backgroundColor: t.surfaces.lineProduct },
-  notice: { flex: 1, paddingVertical: 12 },
+  sendIdle: { backgroundColor: t.surfaces.handle },
+  counter: {
+    fontFamily: fonts.body,
+    fontSize: 10,
+    color: t.textInk.faint,
+    textAlign: "right",
+    paddingTop: 5,
+    paddingRight: 54,
+  },
+
+  notice: { paddingVertical: 12 },
   noticeText: {
     fontFamily: fonts.body,
     fontSize: 12.5,

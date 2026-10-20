@@ -34,6 +34,7 @@ import {
 import { signedMoney } from "@/lib/currency";
 import { useApproxMoney, useCurrency } from "@/lib/currency-context";
 import { naira } from "@/lib/format";
+import { countryName, hasPostcode, normalizeCountry, usesStateList } from "@/lib/geo";
 import { netPriceForLength } from "@/lib/product-variant";
 import { getWallet } from "@/lib/wallet";
 import { useTheme } from "@/theme/theme-context";
@@ -60,6 +61,18 @@ import { layout } from "@/theme/tokens";
 
 const PACKAGING_FEE: Record<string, number> = { standard: 0, premium: 10_000, luxe: 31_000 };
 
+/**
+ * The figures a coupon preview was taken against, as one comparable string.
+ *
+ * Module scope on purpose: it is read inside a `useCallback`, and a function
+ * rebuilt on every render would have to join that callback's dependencies,
+ * which would rebuild the callback on every render and re-fire the effects
+ * that depend on it forever.
+ */
+function couponBasis(code: string, subtotal: number, delivery: number): string {
+  return `${code}|${subtotal}|${delivery}`;
+}
+
 export default function PaymentStep() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -74,11 +87,38 @@ export default function PaymentStep() {
   const [balance, setBalance] = useState<number | null>(null);
   const [chosen, setChosen] = useState<PaymentMethodId | null>(null);
   const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
+  /**
+   * Whether the ₦0 delivery is the customer's birthday month.
+   *
+   * Tracked separately because this screen keeps only the FEE, and a bare "Free"
+   * on the last screen before money moves is where it most needs explaining —
+   * an unexplained discount reads as a mistake about to be corrected. The server
+   * decides it; this only reports what the quote said.
+   */
+  const [birthdayFree, setBirthdayFree] = useState(false);
+  /**
+   * The destination the fee currently on screen was quoted for.
+   *
+   * A ref, not state: it only decides whether to discard a fee, so writing it
+   * must not itself cause a render.
+   */
+  const quotedFor = useRef("");
 
   const [coupon, setCoupon] = useState(draft.coupon);
   const [couponState, setCouponState] = useState<CouponPreview | null>(null);
   const [couponError, setCouponError] = useState<string | undefined>();
   const [couponBusy, setCouponBusy] = useState(false);
+  /**
+   * The figures the coupon on screen was last priced against.
+   *
+   * A ref for the same reason as `quotedFor` above: it only decides whether a
+   * preview needs taking again, so writing it must not itself cause a render.
+   * Claimed before the request goes out, so a code the server refuses is never
+   * retried in a loop by the effects below.
+   */
+  const couponPricedFor = useRef<string | null>(null);
+  /** Whether a code chosen before arriving here has had its one attempt. */
+  const couponSeeded = useRef(false);
 
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,19 +147,75 @@ export default function PaymentStep() {
     };
   }, []);
 
+  /**
+   * The same quote step 1 showed, asked again about the same destination.
+   *
+   * It has to be the DRAFT'S country. Pinned to "NG", this screen quoted a
+   * Nigerian zone for a parcel to Ghana, so the total sitting above the Pay
+   * button disagreed with what POST /orders would charge — and this is the
+   * last figure anyone sees before money moves. Nigeria is priced on the
+   * state, so there is nothing to ask until it exists; everywhere else the
+   * zones are country-level and the country alone is the whole question
+   * (lib/geo.ts).
+   */
   useEffect(() => {
-    if (!ready || !draft.state) return;
+    if (!ready) return;
+    if (usesStateList(draft.country) && !draft.state.trim()) {
+      // There is nothing to ask, and nothing is also the honest answer: the
+      // fee standing here was quoted for the country the shopper has since
+      // left, so leaving it would price a Nigerian parcel on a British zone in
+      // the Total immediately above the Pay button. Null makes the row read
+      // "—" and the PayBar say the delivery is not included yet.
+      setDeliveryFee(null);
+      setBirthdayFree(false);
+      // Claimed, so the next run does not read this as a fresh destination
+      // change and clear what is already cleared.
+      quotedFor.current = `${draft.country}|`;
+      return;
+    }
+    // Drop the OLD destination's fee before asking about the new one — but
+    // ONLY when the destination is what changed.
+    //
+    // Step 1 does this (`app/checkout/index.tsx`, its `destination` key) and
+    // this screen did not, so the fee survived the round trip: tap Change,
+    // switch the country, come back with the system gesture rather than
+    // Continue, and this already-mounted screen re-quoted while still
+    // printing the fee for the country just left — under the Total,
+    // immediately above the Pay button, for as long as `lib/http.ts` takes
+    // to answer (TIMEOUT_MS is 12s). A fee for the wrong destination is not
+    // stale, it is wrong, and this is the last figure before money moves.
+    //
+    // Gated on the destination because `draft.method` is a dependency here
+    // too: clearing unconditionally blanked the row to “—” and — now that Pay
+    // is disabled while the fee is unknown — killed the Pay button for a
+    // whole round trip every time someone toggled Standard/Express, where
+    // the old fee was never wrong, just about to be replaced by the other
+    // half of a quote we already hold.
+    const destination = `${draft.country}|${usesStateList(draft.country) ? draft.state.trim() : ""}`;
+    if (quotedFor.current !== destination) {
+      quotedFor.current = destination;
+      setDeliveryFee(null);
+      setBirthdayFree(false);
+    }
+
     let cancelled = false;
-    getShippingQuote("NG", draft.state)
+    getShippingQuote(draft.country, draft.state.trim())
       .then((q) => {
         if (cancelled) return;
         setDeliveryFee(draft.method === "pickup" ? 0 : draft.method === "express" ? q.express_fee : q.fee);
+        // Not on a pickup: nothing was given up, so there is nothing to thank
+        // anyone for — and the server does not spend the claim on one either.
+        setBirthdayFree(Boolean(q.birthday_free) && draft.method !== "pickup");
       })
-      .catch(() => !cancelled && setDeliveryFee(null));
+      .catch(() => {
+        if (cancelled) return;
+        setDeliveryFee(null);
+        setBirthdayFree(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [ready, draft.state, draft.method]);
+  }, [ready, draft.country, draft.state, draft.method]);
 
   /**
    * Warm the Android Custom Tab so the hosted page does not cold-start.
@@ -196,27 +292,125 @@ export default function PaymentStep() {
 
   /* ---------------- coupon ---------------- */
 
-  const applyCoupon = useCallback(async () => {
-    const code = coupon.trim();
+  const applyCoupon = useCallback(
+    async (raw: string) => {
+      const code = raw.trim();
+      if (!code) return;
+
+      couponPricedFor.current = couponBasis(code, cart.subtotal, (deliveryFee ?? 0) + packagingFee);
+      setCouponBusy(true);
+      setCouponError(undefined);
+      try {
+        // Shipping PLUS packaging, because that is what the server discounts.
+        //
+        // `OrderController::store` passes `$deliveryFee = shipping + packaging`
+        // into `CouponService::evaluate()`, and the `free_shipping` branch
+        // discounts the whole of it. Sending only the shipping half made the
+        // preview under-report: a Lagos order with Luxe packaging showed
+        // “FREE SHIPPING — you save ₦5,000” and was then charged ₦36,000 less, so
+        // the banner, the Total on this screen and the amount taken were three
+        // different numbers.
+        //
+        // Whether “free shipping” SHOULD pay for gift packaging is a separate
+        // question for the shop — this only makes the preview tell the truth about
+        // what the server already does.
+        const preview = await previewCoupon(code, cart.subtotal, (deliveryFee ?? 0) + packagingFee);
+        setCouponState(preview);
+        // The server's spelling of the code, which is the one the order will
+        // carry, so the field stops showing a variant of it.
+        setCoupon(preview.code);
+        set({ coupon: preview.code });
+      } catch (err) {
+        setCouponState(null);
+        /*
+         * The server's own refusal, and its field-scoped one by preference.
+         *
+         * `/coupons/apply` answers an ineligible code with CouponService's
+         * sentence in `message` — "This code is for new customers only.",
+         * "Spend at least ₦200,000 to use this code.", "This code can only be
+         * used on the website." — and a malformed request with Laravel's
+         * `{message, errors}`, where `message` is a summary that can trail off
+         * into "(and 2 more errors)". `errors.code` is the part about the code
+         * itself, so it wins when it is there. Our own sentence is reached only
+         * when the throw was not an API answer at all.
+         */
+        setCouponError(
+          err instanceof CheckoutError
+            ? (err.fieldError("code") ?? err.message)
+            : "That code could not be checked.",
+        );
+      } finally {
+        setCouponBusy(false);
+      }
+    },
+    [cart.subtotal, deliveryFee, packagingFee, set],
+  );
+
+  /**
+   * A coupon the shopper chose before they got here, actually applied.
+   *
+   * "Use at checkout" on the Coupons screen verifies a code and writes it into
+   * the draft. This screen will not put a raw draft string into the order
+   * payload — only a code it has previewed itself (see `pay()`) — which is the
+   * right rule and stays. With nothing bridging the two, those two correct
+   * rules met in the middle and produced a lie: a shopper tapped a valid
+   * ₦20,000 coupon, arrived to find the code sitting in the field, no Discount
+   * row, and paid full price believing the coupon was on.
+   *
+   * The bridge is a preview taken HERE, because this is the only screen that
+   * knows the delivery fee — and a free-shipping code's entire worth IS the
+   * delivery, so the Coupons screen could never have previewed one as anything
+   * but a saving of ₦0. Waiting for the quote is the same reason.
+   *
+   * One attempt per visit. If the server now refuses the code, its words go
+   * under the field, so the shopper is told plainly rather than left to notice
+   * a discount that never arrived.
+   */
+  useEffect(() => {
+    if (couponSeeded.current || !ready || deliveryFee === null) return;
+    // A code applied here by hand is the shopper's own doing and needs no
+    // seeding — and since `applyCoupon` writes the draft, the draft agreeing
+    // with the applied code proves nothing on its own.
+    if (couponState || couponBusy) return;
+
+    const code = draft.coupon.trim();
     if (!code) return;
-    setCouponBusy(true);
-    setCouponError(undefined);
-    try {
-      const preview = await previewCoupon(code, cart.subtotal, deliveryFee ?? 0);
-      setCouponState(preview);
-      set({ coupon: code });
-    } catch (err) {
-      setCouponState(null);
-      setCouponError(err instanceof CheckoutError ? err.message : "That code could not be checked.");
-    } finally {
-      setCouponBusy(false);
-    }
-  }, [coupon, cart.subtotal, deliveryFee, set]);
+
+    couponSeeded.current = true;
+    setCoupon(code);
+    void applyCoupon(code);
+  }, [ready, deliveryFee, draft.coupon, couponState, couponBusy, applyCoupon]);
+
+  /**
+   * Re-price a free-shipping code when the delivery it pays for changes.
+   *
+   * Only that type. `CouponService::discountFor()` computes a percent or fixed
+   * discount from the subtotal alone, and nothing on this screen changes the
+   * subtotal, so re-asking about those would spend the shopper's 30-a-minute
+   * coupon throttle to be told the same number. Free shipping is different: it
+   * is worth exactly the delivery, down to the zone and the Standard/Express
+   * choice. Now that the code is applied on arrival — before the shopper has
+   * picked either — a saving priced against the fee they have since left is
+   * easy to reach, and it sits in the Total immediately above the Pay button.
+   */
+  useEffect(() => {
+    if (!couponState || couponBusy || deliveryFee === null) return;
+    if (couponState.type !== "free_shipping") return;
+
+    const basis = couponBasis(couponState.code, cart.subtotal, deliveryFee + packagingFee);
+    if (couponPricedFor.current === basis) return;
+
+    void applyCoupon(couponState.code);
+  }, [couponState, couponBusy, deliveryFee, packagingFee, cart.subtotal, applyCoupon]);
 
   function clearCoupon() {
     setCoupon("");
     setCouponState(null);
     setCouponError(undefined);
+    couponPricedFor.current = null;
+    // Taken off deliberately, so it must not be seeded straight back out of
+    // the draft by the effect above.
+    couponSeeded.current = true;
     set({ coupon: "" });
   }
 
@@ -249,8 +443,26 @@ export default function PaymentStep() {
         address: draft.address.trim(),
         city: draft.city.trim(),
         state: draft.state.trim(),
-        zip: draft.zip.trim(),
-        country: "NG",
+        // A postcode the form did not show must not be posted either: the
+        // draft is cleared when the country changes, but one restored from
+        // storage can still hold a code for a country that issues none, and
+        // the courier would be handed a number nobody has seen since.
+        //
+        // `hasPostcode()` and not `postcodeRequired()`, which is the same
+        // choice the account screens make (app/account/address.tsx,
+        // app/account/profile.tsx): the question here is whether the box was
+        // on screen, not whether we insisted on it. Asking the required
+        // question threw away an Eircode a Dublin shopper had just typed into
+        // step 1's visible, optional field — entered, shown back to them, and
+        // then dropped from the order for not having been compulsory. What
+        // blocks the payment is still `postcodeRequired()`, through
+        // requiredFor() behind `addressComplete` on the Pay button.
+        zip: hasPostcode(draft.country) ? draft.zip.trim() : "",
+        // The country the shopper chose, not the one this screen used to
+        // assume — the server prices, routes and ships on this string.
+        // `normalizeCountry` only guards its shape (blank, lower case); it
+        // never rewrites a code it cannot name.
+        country: normalizeCountry(draft.country),
         method: draft.method,
         packaging: draft.packaging,
         ...(draft.note.trim() ? { note: draft.note.trim() } : {}),
@@ -270,6 +482,11 @@ export default function PaymentStep() {
       // the total on screen, undisclosed), and a code the order 422'd on could
       // never be cleared, so every later tap re-posted it and the account could
       // not place an order from this device at all.
+      //
+      // That is still the rule. What changed is that a pre-chosen code no
+      // longer dies here: the effect above previews it on arrival, so by the
+      // time this runs a code from the Coupons screen either IS the applied
+      // one or has been refused out loud.
       ...(couponState ? { coupon_code: couponState.code } : {}),
     };
 
@@ -294,6 +511,11 @@ export default function PaymentStep() {
           setCouponState(null);
           setCouponError(err.message);
           setError(null);
+          // The order is the binding judgement, so a code it refused is dead:
+          // drop it from the draft too, or the next visit to this screen would
+          // seed it back and refuse it again before the shopper has typed
+          // anything.
+          set({ coupon: "" });
         } else {
           setError(err.message);
         }
@@ -372,7 +594,24 @@ export default function PaymentStep() {
           }
           label={payLabel}
           busy={placing}
-          disabled={!chosen || cart.lines.length === 0 || !addressComplete}
+          // `deliveryFee === null` means the quote has not resolved — offline, a
+          // 429 from the shipping throttle, any non-2xx. Pay stayed enabled on
+          // a Total that simply omitted delivery, so the wallet affordability
+          // check was made against a figure ₦31,000 short of what the server
+          // would charge. A shopper could commit to a price nobody had quoted.
+          //
+          // `couponBusy` for the mirror of that: a coupon is being priced, so
+          // the Total on the button is not yet the discounted one. It matters
+          // most on arrival, where the code the shopper picked on the Coupons
+          // screen is applied for them — paying during that round trip would
+          // charge full price for a coupon they had already chosen.
+          disabled={
+            !chosen ||
+            cart.lines.length === 0 ||
+            !addressComplete ||
+            deliveryFee === null ||
+            couponBusy
+          }
           bottomInset={insets.bottom}
           onPress={pay}
         />
@@ -391,7 +630,26 @@ export default function PaymentStep() {
                 {draft.phone}
               </Txt>
               <Txt tone="body" size={12.5} style={{ marginTop: 5, lineHeight: 18 }}>
-                {[draft.address, draft.city, draft.state, draft.zip].filter(Boolean).join(", ")}
+                {/* The country belongs on the line now that it can be any
+                    of them: an address that stops at the state reads as a
+                    domestic delivery whatever was chosen a step earlier.
+                    The postcode is gated on the same condition as the payload
+                    below, because this line is a promise about what we are
+                    about to send. A draft restored from storage can still
+                    hold a code for a country that issues none — step 1 hides
+                    the box, the order posts no zip, and this line was printing
+                    "…, 00000, United Arab Emirates" over the Pay button: an
+                    address the shopper cannot edit here and the shop will
+                    never use. */}
+                {[
+                  draft.address,
+                  draft.city,
+                  draft.state,
+                  hasPostcode(draft.country) ? draft.zip : "",
+                  countryName(draft.country),
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
               </Txt>
             </View>
             <Pressable
@@ -461,7 +719,10 @@ export default function PaymentStep() {
             error={couponError}
             trailing={
               <Pressable
-                onPress={couponState ? clearCoupon : applyCoupon}
+                onPress={() => {
+                  if (couponState) clearCoupon();
+                  else void applyCoupon(coupon);
+                }}
                 disabled={couponBusy || (!couponState && !coupon.trim())}
                 accessibilityRole="button"
                 accessibilityLabel={couponState ? "Remove discount code" : "Apply discount code"}
@@ -511,6 +772,11 @@ export default function PaymentStep() {
             value={deliveryFee === null ? "—" : deliveryFee === 0 ? "Free" : money(deliveryFee)}
             tone={deliveryFee === 0 ? "success" : "body"}
           />
+          {birthdayFree ? (
+            <Txt tone="success" size={11.5} style={{ marginTop: 6, lineHeight: 16 }}>
+              Delivery is on us — it’s your birthday month.
+            </Txt>
+          ) : null}
           {packagingFee > 0 ? <SummaryRow label="Packaging" value={money(packagingFee)} /> : null}
           {discount > 0 ? (
             <SummaryRow label={`Discount (${couponState?.code})`} value={signedMoney(money(discount), "−")} tone="success" />

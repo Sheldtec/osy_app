@@ -1,8 +1,12 @@
-import { request } from "./http";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
+
+import { API_BASE, apiHeaders } from "./api";
+import { authToken } from "./auth-token";
+import { ApiError, request } from "./http";
 
 /**
  * The signed-in shopper's own profile — `GET /auth/me`, `PATCH /auth/profile`,
- * `PUT /auth/password`.
+ * `PUT /auth/password`, `POST /auth/avatar`.
  *
  * All three are member-only, so every call here is `auth: true`: without a
  * token there is nothing to show and nothing to change, and failing fast is
@@ -165,3 +169,108 @@ export function closeAccount(proof: { password?: string; email?: string }): Prom
   });
 }
 
+// ---------------------------------------------------------------------------
+// Profile photo
+// ---------------------------------------------------------------------------
+
+/**
+ * The server's own limits for an avatar, mirrored.
+ *
+ * `photo` is the strict CUSTOMER upload tier (`App\Support\Uploads::imageRules`
+ * via `AuthController::updateAvatar`): JPEG and PNG only, magic-byte checked
+ * server-side, so an iPhone HEIC or a renamed .webp is refused however the
+ * picker labelled it — which is why `prepare` below re-encodes before sending
+ * rather than trusting the picker's file.
+ */
+export const AVATAR_MAX_KB = 5120;
+
+/** The longest side we send. An avatar is never drawn larger than ~96pt. */
+const AVATAR_EDGE = 1200;
+
+/**
+ * Shrink and re-encode a picked photo into something the server will accept.
+ *
+ * A 12MP camera-roll photo is several times over the 5 MB cap and may be HEIC,
+ * which the allow-list does not include — both of which come back as a 422
+ * after the upload has already cost the shopper their data. Re-encoding to
+ * bounded JPEG on the phone removes both failures before anything is sent.
+ *
+ * The same problem, solved the same way, as `prepare` in ./special-orders-api —
+ * kept local because that one is private to its module and an avatar wants a
+ * tighter bound than a reference photo.
+ */
+async function prepare(photo: { uri: string; width: number; height: number }): Promise<string> {
+  const longEdge = Math.max(photo.width, photo.height);
+  const context = ImageManipulator.manipulate(photo.uri);
+
+  if (longEdge > AVATAR_EDGE) {
+    context.resize(photo.width >= photo.height ? { width: AVATAR_EDGE } : { height: AVATAR_EDGE });
+  }
+
+  const rendered = await context.renderAsync();
+  const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.85 });
+
+  return saved.uri;
+}
+
+/**
+ * Set the profile photo — `POST /auth/avatar`, multipart, field `photo`.
+ *
+ * `request()` cannot be used: it sets a JSON content type and stringifies the
+ * body, and fetch must be left to set its own multipart boundary (which is why
+ * no Content-Type is given below). The endpoint answers with the FULL updated
+ * profile, so the caller never has to guess the stored URL.
+ *
+ * Throttled 20/min server-side, and the response waits on Cloudinary, hence
+ * the longer timeout than the 12s `request()` default.
+ */
+export async function uploadAvatar(photo: {
+  uri: string;
+  width: number;
+  height: number;
+}): Promise<Profile> {
+  const token = authToken();
+  if (!API_BASE) throw new ApiError("The store is not configured on this device.", 0);
+  if (!token) throw new ApiError("Please sign in to continue.", 401);
+
+  const uri = await prepare(photo);
+
+  const form = new FormData();
+  // React Native's FormData takes this {uri, name, type} shape rather than a
+  // Blob; the cast is what every RN upload does.
+  form.append("photo", { uri, name: "avatar.jpg", type: "image/jpeg" } as unknown as Blob);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/auth/avatar`, {
+      method: "POST",
+      // No Content-Type: fetch must set the multipart boundary itself.
+      headers: apiHeaders({ Authorization: `Bearer ${token}` }),
+      body: form,
+      signal: controller.signal,
+    });
+  } catch {
+    throw new ApiError(
+      controller.signal.aborted
+        ? "That upload took too long. Check your connection and try again."
+        : "Could not reach the store. Check your connection and try again.",
+      0,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const body = (await res.json().catch(() => ({}))) as {
+    message?: string;
+    errors?: Record<string, string[]>;
+  } & Profile;
+
+  if (!res.ok) {
+    throw new ApiError(body.message || "We couldn’t save that photo.", res.status, body.errors);
+  }
+
+  return body as Profile;
+}

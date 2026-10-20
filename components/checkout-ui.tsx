@@ -168,6 +168,8 @@ export function SelectField({
   style,
   account,
   bottomInset = 16,
+  clearable,
+  clearLabel = "Clear selection",
 }: {
   label: string;
   value: string;
@@ -179,6 +181,22 @@ export function SelectField({
   /** See Field — the account area's lighter label and hairline. */
   account?: boolean;
   bottomInset?: number;
+  /**
+   * Offer a way back to no value at all.
+   *
+   * A picker built only from its options is a one-way door: once a choice is
+   * made it can be changed but never undone. That is correct for a REQUIRED
+   * field and wrong for a value that belongs to an optional group — Nigeria's
+   * state picker had no empty row, so a shopper emptying their street, city and
+   * postcode to remove a saved address could not clear the state with them, the
+   * address stayed three-quarters filled, and the save was refused with no way
+   * to comply.
+   *
+   * Opt-in, because most pickers in this flow are genuinely required.
+   */
+  clearable?: boolean;
+  /** What the clearing row says. Name the thing being removed where possible. */
+  clearLabel?: string;
 }) {
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -225,6 +243,23 @@ export function SelectField({
             {label}
           </Txt>
           <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            {/* Only once there is something to clear — a "clear" row on an empty
+                picker is a control that does nothing. */}
+            {clearable && value !== "" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={clearLabel}
+                onPress={() => {
+                  onChange("");
+                  setOpen(false);
+                }}
+                style={({ pressed }) => [styles.sheetRow, pressed && { opacity: 0.7 }]}
+              >
+                <Txt tone="faint" size={14}>
+                  {clearLabel}
+                </Txt>
+              </Pressable>
+            ) : null}
             {options.map((o) => {
               const active = o.value === value;
               return (

@@ -14,6 +14,7 @@ import { Txt } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { useApproxMoney } from "@/lib/currency-context";
 import { ApiError } from "@/lib/http";
+import { toneFor, visualFor } from "@/lib/notification-visuals";
 import {
   deleteNotification,
   getNotificationPreferences,
@@ -37,32 +38,16 @@ import { fonts } from "@/theme/tokens";
  * routes share one 60-per-minute bucket with the wallet, orders and coupons,
  * so a feed poll here would rate-limit unrelated screens.
  *
- * Presentation keys off `group`, never off `type`: the type column is free
- * text server-side and new ones ship without an app release, so an exhaustive
- * switch would silently drop them. The API itself falls back to "Account" for
- * anything it does not recognise, and so does this.
+ * Presentation lives in `lib/notification-visuals.ts`, which takes the row's
+ * TONE from `group` — a small vocabulary the API normalises — and its GLYPH
+ * from `type` through a lookup with a per-group default. Nothing here switches
+ * exhaustively on `type`: that column is free text server-side and new ones
+ * ship without an app release.
  *
  * Deleting is a HARD delete with no undo endpoint, which is why it asks first.
  */
 
 const PAGE = 25;
-
-/**
- * Tints by GROUP, with a fallback — groups are a small, stable vocabulary.
- *
- * A function of the theme rather than a table of pastels: these are WELLS
- * behind an icon, so each one has to sit a step away from the card it is on,
- * in whichever direction that card went.
- */
-function groupTint(t: Theme): Record<string, string> {
-  return {
-    Orders: t.colors.primaryCont,
-    Wallet: t.colors.successBg,
-    Thrift: t.surfaces.noteTint,
-    Account: t.surfaces.segmentTrack,
-    Offers: t.surfaces.offerTint,
-  };
-}
 
 export default function NotificationsScreen() {
   const theme = useTheme();
@@ -229,8 +214,8 @@ export default function NotificationsScreen() {
       ) : null}
 
       {grouped.map((n) => {
-        const tints = groupTint(theme);
-        const tint = tints[n.group] ?? tints.Account;
+        const { kind, Icon } = visualFor(n);
+        const tone = toneFor(kind, theme);
         // Naira as stored, unless the server sent a template for the figure —
         // then the same sentence in the shopper's chosen currency.
         const { title, body } = notificationText(n, money);
@@ -244,14 +229,25 @@ export default function NotificationsScreen() {
               accessibilityLabel={`${title}${n.read ? "" : ", unread"}. ${body ?? ""}`}
               style={({ pressed }) => [s.row, pressed && { opacity: 0.75 }]}
             >
-              <View style={[s.dot, { backgroundColor: tint }]}>
-                {!n.read ? <View style={s.unreadDot} /> : null}
+              <View style={[s.well, { backgroundColor: tone.well }]}>
+                <Icon width={18} height={18} color={tone.ink} />
               </View>
 
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <Text style={s.group}>{n.group.toUpperCase()}</Text>
                   <Text style={s.when}>{when(n.at)}</Text>
+
+                  {/* Unread, moved out of the icon well.
+                      It used to BE the well's only content, so filling the well
+                      with a glyph would have taken the one marker this screen
+                      has — the title's medium weight is a difference you only
+                      see with a read row directly above it. Out here it sits on
+                      the same baseline as the timestamp, in the row's own tone,
+                      and is the single thing on the line that is filled in. */}
+                  {!n.read ? (
+                    <View style={s.unreadDot} />
+                  ) : null}
                 </View>
 
                 <Txt
@@ -376,14 +372,25 @@ function when(iso: string | null): string {
 
 const makeS = (t: Theme) => StyleSheet.create({
   row: { flexDirection: "row", gap: 12, padding: 16 },
-  dot: {
+  // The account area's 34pt icon well (see `Row` in components/account-ui).
+  well: {
     width: 34,
     height: 34,
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
   },
-  unreadDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: t.colors.primary },
+  /**
+   * One fixed, legible colour — NOT the row's tone.
+   *
+   * Taking the tone made the dot agree with the glyph, which reads nicely and
+   * fails at the job: on the warm wells the tone is gold, and a 7px gold dot on
+   * white is about 2.7:1, under the 3:1 floor. Worse, it sits 8px from a grey
+   * timestamp, so at that contrast it reads as punctuation rather than status.
+   * `primaryOn` is the brand purple that is legible on both themes' grounds and
+   * clears 10:1 in light, which is what the previous build used.
+   */
+  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: t.colors.primaryOn },
 
   group: {
     fontFamily: fonts.medium,

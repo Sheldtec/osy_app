@@ -1,3 +1,4 @@
+import type { PaymentMethodId } from "./checkout-api";
 import { request } from "./http";
 
 /**
@@ -40,6 +41,72 @@ export interface OrderItem {
   codes: string[];
 }
 
+/** How a manual payment is actually made. Arrives with the invoice, not once. */
+export interface ManualPaymentInstructions {
+  type: "bank_transfer" | "crypto";
+  /** The narration the shop matches a transfer against. Never rotates. */
+  reference: string | null;
+  amount: number;
+  /**
+   * Where to send it — null when the shop cannot take this method any more.
+   *
+   * It can go away under a standing invoice: the details are admin-managed, so
+   * an order placed as a bank transfer outlives the switch being turned off.
+   * Null means "pick another method", which `OrderInvoice.methods` confirms;
+   * the reference above stays valid either way, because money already on its
+   * way still has to find this order.
+   */
+  bank?: {
+    bank_name?: string;
+    account_name?: string;
+    account_number?: string;
+  } | null;
+  crypto?: {
+    usdt_address?: string;
+    usdt_network?: string;
+    btc_address?: string;
+  } | null;
+}
+
+/**
+ * An unpaid order, as something that can still be PAID.
+ *
+ * Present on every read of an order that is awaiting money, and null on every
+ * other one — so `invoice !== null` is the whole test for "is there something
+ * to pay here". It used to be re-derived on each screen from `status`,
+ * `paid_at` and `amount_received`, which is three chances to disagree with the
+ * server about whether a customer owes money.
+ *
+ * There is deliberately no deadline: orders in this shop have no expiry, and a
+ * date the server would not act on is worse than none, because the customer
+ * would plan around it.
+ */
+export interface OrderInvoice {
+  /** The SERVER's own answer to "will POST /orders/{id}/pay work right now". */
+  payable: boolean;
+  /** Why it will not, when it will not. Show this verbatim — it is specific. */
+  reason: string | null;
+  /** What is still owed, in ₦. Net of anything the shop has already received. */
+  amount_due: number;
+  /** The method currently chosen. Changeable while the order is unpaid. */
+  method: PaymentMethodId | null;
+  /**
+   * A card payment the customer has been sent off to make.
+   *
+   * The order is genuinely still unpaid, but for those minutes "pay it again"
+   * is the wrong thing to offer — it is how one order collects two real
+   * charges. Lead with `check_ref` instead.
+   */
+  awaiting: boolean;
+  /** An unanswered payment's reference, to resume verifying rather than re-charge. */
+  check_ref: string | null;
+  /** Which methods the shop can take right now. Offer nothing else. */
+  methods: Record<PaymentMethodId, boolean>;
+  /** Bank or crypto details — present only while a manual method is chosen. */
+  instructions: ManualPaymentInstructions | null;
+  placed_at: string | null;
+}
+
 export interface Order {
   id: number;
   ref: string;
@@ -52,8 +119,20 @@ export interface Order {
     zip: string | null;
     country: string | null;
     method: string | null;
+    /**
+     * How the parcel physically travels, and the two are not variations of one
+     * another: a `waybill` goes with an inter-state transport company and the
+     * customer COLLECTS it at a terminal, a `logistics` courier brings it to
+     * the door. Null until the team dispatches.
+     */
+    fulfilment_type: "waybill" | "logistics" | null;
+    /** Transport company on a waybill, courier on a logistics shipment. */
     courier: string | null;
+    /** Waybill number or tracking number, depending on `fulfilment_type`. */
     tracking_number: string | null;
+    /** Waybill only: the park/terminal the parcel is released at. */
+    pickup_terminal: string | null;
+    /** The delivery note left on the order at checkout. */
     note: string | null;
   };
   totals: { subtotal: number; delivery: number; discount: number; total: number };
@@ -62,6 +141,22 @@ export interface Order {
   payment_method: string | null;
   /** Set when a newer attempt replaced this one — not a failure of theirs. */
   superseded_by: string | null;
+  /**
+   * The shop's own message about this order.
+   *
+   * Named for where it is written (the admin order screen) rather than for who
+   * reads it: the server used to send it to admins only and now sends it to the
+   * buyer as well, so the app presents it as a message FROM the shop.
+   */
+  admin_note: string | null;
+  /**
+   * What is owed and how to pay it — null unless this order is awaiting money.
+   *
+   * The order record exists from before payment, so an unpaid one is an
+   * invoice: it can be paid now, by a different method than the one chosen at
+   * checkout, from this screen.
+   */
+  invoice: OrderInvoice | null;
   items: OrderItem[];
   timeline: {
     placed_at: string | null;
@@ -119,6 +214,25 @@ export async function getOrder(id: number): Promise<Order> {
 }
 
 /**
+ * The order with this REFERENCE, or null if the customer has no such order.
+ *
+ * It reads the whole list because there is no lookup-by-reference endpoint and
+ * the one place that needs this has nothing else to go on: after a payment,
+ * all the confirm screen holds is the `LX-` reference from
+ * `GET /payments/verify` — the create response's `order_id` is that same
+ * reference, not the numeric id every order route binds on.
+ *
+ * The cost is the whole (server-capped) list for one order, which is the same
+ * call the orders screen already makes on every visit, and the order being
+ * looked for was placed seconds ago so it is at the front of it.
+ */
+export async function findMyOrderByRef(ref: string): Promise<Order | null> {
+  const orders = await getMyOrders();
+
+  return orders.find((o) => o.ref === ref) ?? null;
+}
+
+/**
  * Cancel an order the shopper no longer wants.
  *
  * The server allows it only while nothing has been received: pending, unpaid,
@@ -132,6 +246,53 @@ export async function cancelOrder(id: number): Promise<Order> {
     auth: true,
   });
   return res.order;
+}
+
+export interface OrderPaymentStarted {
+  /** The order, re-read after the attempt. Replace local state with this. */
+  order: Order;
+  /** True ONLY for a wallet payment, which settles inside the request. */
+  paid: boolean;
+  /** Wallet only — the balance left afterwards. */
+  wallet_balance?: number;
+  /** Gateway only — the hosted checkout to open. */
+  payment_url?: string;
+  /** Gateway only — the reference `verifyPayment` resolves. */
+  tx_ref?: string;
+  /** Manual methods only — where to send the money, and what to quote. */
+  instructions?: ManualPaymentInstructions;
+}
+
+/**
+ * Pay an order that already exists, or change the method on it.
+ *
+ * No amount is ever sent. The server re-prices the charge from the order's own
+ * stored total, read back under a row lock, so a figure a screen showed a
+ * minute ago can never become what is debited — and the client names a METHOD,
+ * nothing else.
+ *
+ * A WALLET payment is finished when this resolves (`paid: true`). A GATEWAY
+ * payment is NOT: it comes back with `payment_url` and nothing has moved yet,
+ * and the order is paid only once the server has verified the transaction with
+ * the provider. Treat a returned link as "go and pay", never as "paid". A
+ * MANUAL method comes back with instructions and stays unpaid until a person at
+ * the shop records the receipt.
+ *
+ * No currency is sent, exactly as `createOrder` sends none: this app is charged
+ * in Naira whatever currency it is displaying, and says so on every screen that
+ * takes money. The endpoint accepts a currency for the website, which offers
+ * that choice; adding it here would change what a customer is charged with no
+ * screen asking them first.
+ */
+export async function payOrder(
+  id: number,
+  method: PaymentMethodId,
+): Promise<OrderPaymentStarted> {
+  return request<OrderPaymentStarted>(`/orders/${id}/pay`, {
+    method: "POST",
+    body: { method },
+    auth: true,
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -158,10 +319,25 @@ export interface CouponCard {
   starts_at: string | null;
   ends_at: string | null;
   badge: string | null;
-  /** Where it may be used. App-only cards are hidden — see the note below. */
+  /**
+   * Where it may be spent.
+   *
+   * The API identifies the client that asked, so public offers for the other
+   * channel never reach us — but a WEBSITE-ONLY coupon this customer holds
+   * does, and the screen labels it instead of hiding it.
+   */
   channel: "web" | "app" | "both";
   channel_label: string | null;
   status: "available" | "used" | "expired";
+  /**
+   * Live, but not open yet — `starts_at` is in the future.
+   *
+   * Decided by the SERVER's clock, which is the clock that will accept or
+   * refuse the code. These used to arrive as `expired`, because one window
+   * check answered for both ends of it, so a coupon the shop was about to
+   * honour was filed under the one heading that says "forget about it".
+   */
+  scheduled: boolean;
 }
 
 export interface CouponWallet {
@@ -172,8 +348,8 @@ export interface CouponWallet {
 }
 
 /**
- * The customer's codes: ones they hold, plus every live public coupon they
- * qualify for — so a valid offer surfaces without them knowing the code.
+ * The customer's coupons: ones they hold, plus every live public offer they
+ * qualify for — so a valid one surfaces without them knowing the code.
  */
 export function getCoupons(): Promise<CouponWallet> {
   return request<CouponWallet>("/coupons", { auth: true });

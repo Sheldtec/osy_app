@@ -79,6 +79,9 @@ export const darkTheme: Theme = {
     // than it does on white.
     gold1: "#E3CFA6",
     gold2: "#C9A875",
+    // On the dark warm well (#2E2718) the mid gold already clears 6:1, so the
+    // "dark" gold lifts rather than darkens — same rule as `primaryOn`.
+    goldDark: "#C9A875",
     champ: "#C7B39A",
 
     // Type.
@@ -127,6 +130,11 @@ export const darkTheme: Theme = {
 
     handle: "#473D58",
     offerTint: "#33261B",
+    // The wallpaper goes BELOW the app's own ground here, not above it: the
+    // bubbles are the lifted surface in this room, and a ground lighter than
+    // its bubbles inverts the whole depth cue.
+    chat: "#0E0B13",
+    chatBubble: "#241C2E",
     cartFade: "rgba(19,17,24,0)",
 
     stockBg: "#16291D",

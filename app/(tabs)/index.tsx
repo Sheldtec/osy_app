@@ -77,8 +77,6 @@ import { fonts, heroSlides, layout } from "@/theme/tokens";
  */
 
 const GUTTER = layout.gutter;
-/** Scroll offset past which the search bar is pinned (the header's height). */
-const STICKY_AT = 44;
 /** Collections revealed per scroll-to-bottom. */
 const REVEAL_STEP = 3;
 /** Collections rendered before the first scroll. */
@@ -153,7 +151,6 @@ export default function HomeScreen() {
   const [planning, setPlanning] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [stuck, setStuck] = useState(false);
   const reveal = useScrollReveal();
 
   const contentWidth = width - GUTTER * 2;
@@ -218,11 +215,6 @@ export default function HomeScreen() {
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
-
-      const next = contentOffset.y > STICKY_AT;
-      // Only when it CHANGES — setting state on every frame of a scroll would
-      // re-render the whole list sixty times a second.
-      setStuck((was) => (was === next ? was : next));
 
       // The concierge bubble steps aside while you move down the page. Reported
       // from inside the handler this screen already has, rather than attaching a
@@ -304,11 +296,14 @@ export default function HomeScreen() {
   }
 
   return (
-    // The safe-area inset lives on the OUTER view, so the pinned search bar
-    // sits below the status bar rather than under it. The overlay below uses
-    // top: 0 for the same reason — an absolutely-positioned child is laid out
-    // from its parent's PADDING edge, so top: insets.top would double it.
+    // The safe-area inset lives on the OUTER view, so the fixed bar sits below
+    // the status bar rather than under it.
     <View style={{ flex: 1, backgroundColor: theme.surfaces.cart, paddingTop: insets.top }}>
+      {/* Outside the list, so it stays put while the feed moves under it. No
+          absolute positioning and no padding to keep in sync — it is simply
+          the first child, and the list takes the rest. */}
+      <TopBar />
+
       <FlatList
         data={visible}
         keyExtractor={(s) => s.id}
@@ -337,20 +332,24 @@ export default function HomeScreen() {
         removeClippedSubviews={false}
       />
 
-      {/* Pinned search — fades in once the header has scrolled away. */}
-      <PinnedSearch visible={stuck} reduced={reduced} />
     </View>
   );
 }
 
-/** The scroll-away chrome: header row, search, categories, hero. */
-const HomeHeader = memo(function HomeHeader({
-  contentWidth,
-  categories,
-}: {
-  contentWidth: number;
-  categories: HomePlan["categories"];
-}) {
+/**
+ * The fixed top bar — avatar and the icon row.
+ *
+ * It sits OUTSIDE the list rather than scrolling away with the rest of the
+ * header (owner direction, 2026-10-17). Profile, try-on, saved pieces and the
+ * bag are destinations you reach for at any point in a long feed, and hunting
+ * for them by scrolling back to the top is the kind of small tax that adds up.
+ *
+ * The search bar used to pin itself here once this row scrolled away. It no
+ * longer does: with these four always present, a second floating bar competing
+ * for the same strip was one chrome too many. Search scrolls off with the rest
+ * of the page, and Shop is one tap away in the nav.
+ */
+function TopBar() {
   const theme = useTheme();
   const styles = useThemedStyles(makeStyles);
   const cart = useCart();
@@ -358,7 +357,6 @@ const HomeHeader = memo(function HomeHeader({
   const { features } = useStorefrontSettings();
 
   return (
-    <View>
       <View style={styles.header}>
         {/* The avatar, not a hamburger.
             It replaces a menu button that had no onPress at all — a control
@@ -424,7 +422,19 @@ const HomeHeader = memo(function HomeHeader({
           <IconBag width={24} height={24} color={theme.textInk.strong} />
         </Pressable>
       </View>
+  );
+}
 
+/** The scroll-away chrome: search, categories, hero. */
+const HomeHeader = memo(function HomeHeader({
+  contentWidth,
+  categories,
+}: {
+  contentWidth: number;
+  categories: HomePlan["categories"];
+}) {
+  return (
+    <View>
       <SearchBar onPress={() => router.push("/shop")} style={{ marginTop: 8 }} />
 
       <CategoryRail categories={categories} />
@@ -434,32 +444,6 @@ const HomeHeader = memo(function HomeHeader({
   );
 });
 
-function PinnedSearch({ visible, reduced }: { visible: boolean; reduced: boolean }) {
-  const styles = useThemedStyles(makeStyles);
-  const fade = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const animation = Animated.timing(fade, {
-      toValue: visible ? 1 : 0,
-      duration: reduced ? 0 : motion.fast,
-      easing: easeOut,
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [fade, visible, reduced]);
-
-  return (
-    <Animated.View
-      style={[
-        styles.pinned,
-        { opacity: fade, pointerEvents: visible ? "auto" : "none" },
-      ]}
-    >
-      <SearchBar onPress={() => router.push("/shop")} />
-    </Animated.View>
-  );
-}
 
 function HomeFooter({ more, count }: { more: boolean; count: number }) {
   const theme = useTheme();
@@ -868,16 +852,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     height: 40,
   },
 
-  pinned: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingBottom: 10,
-    backgroundColor: t.surfaces.cart,
-    borderBottomWidth: 1,
-    borderBottomColor: t.surfaces.line,
-  },
 
   rail: { paddingHorizontal: GUTTER, paddingTop: 18, gap: 16 },
   /** The fits-on-screen case: spread evenly instead of bunching to the left. */

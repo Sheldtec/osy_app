@@ -11,6 +11,15 @@ export const colors = {
   primaryCont: "#EEE6F3",
   gold1: "#DEC79B",
   gold2: "#B7986A",
+  /**
+   * The gold that can be READ, not just decorated with.
+   *
+   * `gold2` on the warm wells (`noteTint`, `offerTint`) measures about 2.4:1,
+   * under the 3:1 floor for a non-text glyph — fine behind a chip that also
+   * carries a word, and not fine when a thin-stroke icon is the only content.
+   * This is the website's `gold-dark`, so the two products agree.
+   */
+  goldDark: "#8A6E42",
   champ: "#C7B39A",
   ink: "#1C1420",
   ink2: "#4A4151",
@@ -143,6 +152,18 @@ export const surfaces = {
   handle: "#D6CFD9",
   /** Warm well behind an offer/promo icon. */
   offerTint: "#FBEFE6",
+  /**
+   * The community room's wallpaper, and the fill of an incoming bubble.
+   *
+   * A chat needs its bubbles to sit ON something. Every other screen's ground is
+   * near-white and its cards are white, which works because those cards carry a
+   * hairline border — but a bordered speech bubble reads as a form field, so the
+   * bubbles have no border and the GROUND has to supply the separation instead.
+   * It is tinted toward the brand rather than neutral grey, so the room still
+   * looks like this shop.
+   */
+  chat: "#EEE8F1",
+  chatBubble: "#FFFFFF",
   /**
    * `cart` at zero alpha, for the sticky bar's fade.
    *

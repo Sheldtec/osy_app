@@ -21,8 +21,7 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "edgeToEdgeEnabled": true
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -48,7 +47,8 @@
           "photosPermission": "OsyGentle uses a photo you choose to show you how a piece would look on you.",
           "cameraPermission": "OsyGentle uses your camera to take the photo your try-on is rendered from."
         }
-      ]
+      ],
+      "expo-build-properties"
     ],
     "experiments": {
       "typedRoutes": true

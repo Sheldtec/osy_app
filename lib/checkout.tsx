@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { useAuth } from "./auth";
+import { DEFAULT_COUNTRY, postcodeRequired, regionRequired } from "./geo";
 
 /**
  * What the shopper has filled in, carried between the checkout steps.
@@ -37,7 +38,7 @@ export interface CheckoutDraft {
   city: string;
   state: string;
   zip: string;
-  /** ISO-2. Members ship within Nigeria, as on the website. */
+  /** ISO-2. Defaults to Nigeria; the shopper can change it (lib/geo.ts). */
   country: string;
   method: DeliveryMethod;
   packaging: PackagingTier;
@@ -54,23 +55,48 @@ const EMPTY: CheckoutDraft = {
   city: "",
   state: "",
   zip: "",
-  country: "NG",
+  country: DEFAULT_COUNTRY,
   method: "standard",
   packaging: "standard",
   note: "",
   coupon: "",
 };
 
-/** The seven fields the API needs before an order can be priced or shipped. */
+/**
+ * The fields the API needs before an order can be priced or shipped.
+ *
+ * `zip` is NOT in here, because whether an address has one is a question about
+ * the country: around a third of the countries we ship to issue no postal code
+ * at all. It was once unconditional, which meant a basket going to Accra, Dubai
+ * or Hong Kong could never be paid for — the Pay button stayed disabled on a
+ * field the form was right not to show. See `requiredFor()`.
+ */
 const REQUIRED: (keyof CheckoutDraft)[] = [
   "first_name",
   "last_name",
   "phone",
   "address",
   "city",
-  "state",
-  "zip",
 ];
+
+/**
+ * The same list for a given country, with the two country-dependent parts added
+ * back where that country has them.
+ *
+ * `state` is not unconditional either. Singapore, Monaco, Qatar, Hong Kong and
+ * the other city-states have no sub-national division to name, so demanding one
+ * forced the shopper to invent a region — usually by retyping the city — purely
+ * to get the Pay button to enable, and that invented string was then posted as
+ * `delivery.state`. The server validates it as nullable; `regionRequired()`
+ * holds the list.
+ */
+function requiredFor(country: string): (keyof CheckoutDraft)[] {
+  const list = [...REQUIRED];
+  if (regionRequired(country)) list.push("state");
+  if (postcodeRequired(country)) list.push("zip");
+
+  return list;
+}
 
 /**
  * An order that has been created and is waiting on money.
@@ -198,7 +224,7 @@ export function CheckoutProvider({ children }: { children: ReactNode }) {
   );
 
   const missing = useMemo(
-    () => REQUIRED.filter((k) => String(draft[k] ?? "").trim() === ""),
+    () => requiredFor(draft.country).filter((k) => String(draft[k] ?? "").trim() === ""),
     [draft],
   );
 

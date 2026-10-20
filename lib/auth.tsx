@@ -87,6 +87,15 @@ interface AuthValue {
   loading: boolean;
   signedIn: boolean;
   signIn: (email: string, password: string) => Promise<AuthUser>;
+  /**
+   * Exchange a Google identity token for a session.
+   *
+   * The app never decides who the customer is. It hands the raw token to the
+   * server, which verifies the signature against Google's JWKS and checks the
+   * audience against its own allow list before issuing anything. A token this
+   * app did not obtain honestly gets a 401, not a session.
+   */
+  signInWithGoogle: (idToken: string) => Promise<AuthUser>;
   signUp: (input: SignupInput) => Promise<AuthUser>;
   /**
    * Validate one signup step against the server before moving to the next.
@@ -248,6 +257,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           password,
         });
         await persist(result.token, result.user);
+        return result.user;
+      },
+
+      signInWithGoogle: async (idToken) => {
+        // `credential` is the field name the website already posts and the
+        // server already reads; this is the same endpoint, not a mobile one.
+        const result = await post<{ token: string; user: AuthUser }>("/auth/google", {
+          credential: idToken,
+        });
+        await persist(result.token, result.user);
+
         return result.user;
       },
 

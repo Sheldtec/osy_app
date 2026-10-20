@@ -18,6 +18,7 @@ import {
 import { IconCalendar, IconUnits } from "@/components/icons";
 import { Txt } from "@/components/ui";
 import { getMyOrders, ORDER_BUCKETS, type Order, type OrderStatus } from "@/lib/account-api";
+import { naira } from "@/lib/format";
 import { ApiError } from "@/lib/http";
 import { useApproxMoney } from "@/lib/currency-context";
 import { useTheme } from "@/theme/theme-context";
@@ -326,6 +327,21 @@ function OrderCard({ order }: { order: Order }) {
         {order.superseded_by ? (
           <Txt tone="body" size={9} style={{ marginTop: 12, lineHeight: 14 }}>
             Replaced by a newer attempt ({order.superseded_by}).
+          </Txt>
+        ) : null}
+
+        {/* ---- what is still owed ----
+            The "To pay" pill said an order needed paying and the card then
+            offered nothing about it. This says what is owed and, when a card
+            payment is still unconfirmed, says that instead — because on those
+            rows "pay this" is the wrong next step. ₦, because it is a figure
+            about to be transacted; the total above stays in the chosen
+            currency, where it is only read. */}
+        {order.invoice ? (
+          <Txt tone={order.invoice.awaiting ? "body" : "primary"} size={10} weight="medium" style={{ marginTop: 12 }}>
+            {order.invoice.awaiting
+              ? "A card payment on this order isn’t confirmed yet — open it to check."
+              : `${naira(order.invoice.amount_due)} to pay — open it to finish`}
           </Txt>
         ) : null}
       </Panel>
